@@ -37,6 +37,7 @@
 #include "src/arm64/disasm-arm64.h"
 #include "src/arm64/simulator-arm64.h"
 #include "src/arm64/utils-arm64.h"
+#include "src/base/utils/random-number-generator.h"
 #include "src/macro-assembler.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/test-utils-arm64.h"
@@ -190,12 +191,12 @@ static void InitializeVM() {
   RESET();                                                                     \
   START_AFTER_RESET();
 
-#define RUN()                                                \
-  CpuFeatures::FlushICache(buf, masm.SizeOfGeneratedCode()); \
-  {                                                          \
-    void (*test_function)(void);                             \
-    memcpy(&test_function, &buf, sizeof(buf));               \
-    test_function();                                         \
+#define RUN()                                                       \
+  Assembler::FlushICache(isolate, buf, masm.SizeOfGeneratedCode()); \
+  {                                                                 \
+    void (*test_function)(void);                                    \
+    memcpy(&test_function, &buf, sizeof(buf));                      \
+    test_function();                                                \
   }
 
 #define END()                                                                  \
@@ -2964,61 +2965,6 @@ TEST(ldp_stp_offset_wide) {
   CHECK_EQUAL_64(dst_base - base_offset, x21);
   CHECK_EQUAL_64(src_base + base_offset + 24, x18);
   CHECK_EQUAL_64(dst_base + base_offset + 56, x19);
-
-  TEARDOWN();
-}
-
-
-TEST(ldnp_stnp_offset) {
-  INIT_V8();
-  SETUP();
-
-  uint64_t src[3] = {0x0011223344556677UL, 0x8899aabbccddeeffUL,
-                     0xffeeddccbbaa9988UL};
-  uint64_t dst[7] = {0, 0, 0, 0, 0, 0, 0};
-  uintptr_t src_base = reinterpret_cast<uintptr_t>(src);
-  uintptr_t dst_base = reinterpret_cast<uintptr_t>(dst);
-
-  START();
-  __ Mov(x16, src_base);
-  __ Mov(x17, dst_base);
-  __ Mov(x18, src_base + 24);
-  __ Mov(x19, dst_base + 56);
-  __ Ldnp(w0, w1, MemOperand(x16));
-  __ Ldnp(w2, w3, MemOperand(x16, 4));
-  __ Ldnp(x4, x5, MemOperand(x16, 8));
-  __ Ldnp(w6, w7, MemOperand(x18, -12));
-  __ Ldnp(x8, x9, MemOperand(x18, -16));
-  __ Stnp(w0, w1, MemOperand(x17));
-  __ Stnp(w2, w3, MemOperand(x17, 8));
-  __ Stnp(x4, x5, MemOperand(x17, 16));
-  __ Stnp(w6, w7, MemOperand(x19, -24));
-  __ Stnp(x8, x9, MemOperand(x19, -16));
-  END();
-
-  RUN();
-
-  CHECK_EQUAL_64(0x44556677, x0);
-  CHECK_EQUAL_64(0x00112233, x1);
-  CHECK_EQUAL_64(0x0011223344556677UL, dst[0]);
-  CHECK_EQUAL_64(0x00112233, x2);
-  CHECK_EQUAL_64(0xccddeeff, x3);
-  CHECK_EQUAL_64(0xccddeeff00112233UL, dst[1]);
-  CHECK_EQUAL_64(0x8899aabbccddeeffUL, x4);
-  CHECK_EQUAL_64(0x8899aabbccddeeffUL, dst[2]);
-  CHECK_EQUAL_64(0xffeeddccbbaa9988UL, x5);
-  CHECK_EQUAL_64(0xffeeddccbbaa9988UL, dst[3]);
-  CHECK_EQUAL_64(0x8899aabb, x6);
-  CHECK_EQUAL_64(0xbbaa9988, x7);
-  CHECK_EQUAL_64(0xbbaa99888899aabbUL, dst[4]);
-  CHECK_EQUAL_64(0x8899aabbccddeeffUL, x8);
-  CHECK_EQUAL_64(0x8899aabbccddeeffUL, dst[5]);
-  CHECK_EQUAL_64(0xffeeddccbbaa9988UL, x9);
-  CHECK_EQUAL_64(0xffeeddccbbaa9988UL, dst[6]);
-  CHECK_EQUAL_64(src_base, x16);
-  CHECK_EQUAL_64(dst_base, x17);
-  CHECK_EQUAL_64(src_base + 24, x18);
-  CHECK_EQUAL_64(dst_base + 56, x19);
 
   TEARDOWN();
 }
@@ -11220,6 +11166,176 @@ TEST(pool_size) {
   }
 
   DCHECK(pool_count == 2);
+
+  TEARDOWN();
+}
+
+
+TEST(jump_tables_forward) {
+  // Test jump tables with forward jumps.
+  const int kNumCases = 512;
+
+  INIT_V8();
+  SETUP_SIZE(kNumCases * 5 * kInstructionSize + 8192);
+  START();
+
+  int32_t values[kNumCases];
+  isolate->random_number_generator()->NextBytes(values, sizeof(values));
+  int32_t results[kNumCases];
+  memset(results, 0, sizeof(results));
+  uintptr_t results_ptr = reinterpret_cast<uintptr_t>(results);
+
+  Label loop;
+  Label labels[kNumCases];
+  Label done;
+
+  const Register& index = x0;
+  STATIC_ASSERT(sizeof(results[0]) == 4);
+  const Register& value = w1;
+  const Register& target = x2;
+
+  __ Mov(index, 0);
+  __ Mov(target, results_ptr);
+  __ Bind(&loop);
+
+  {
+    Assembler::BlockPoolsScope block_pools(&masm);
+    Label base;
+
+    __ Adr(x10, &base);
+    __ Ldr(x11, MemOperand(x10, index, LSL, kPointerSizeLog2));
+    __ Br(x11);
+    __ Bind(&base);
+    for (int i = 0; i < kNumCases; ++i) {
+      __ dcptr(&labels[i]);
+    }
+  }
+
+  for (int i = 0; i < kNumCases; ++i) {
+    __ Bind(&labels[i]);
+    __ Mov(value, values[i]);
+    __ B(&done);
+  }
+
+  __ Bind(&done);
+  __ Str(value, MemOperand(target, 4, PostIndex));
+  __ Add(index, index, 1);
+  __ Cmp(index, kNumCases);
+  __ B(ne, &loop);
+
+  END();
+
+  RUN();
+
+  for (int i = 0; i < kNumCases; ++i) {
+    CHECK_EQ(values[i], results[i]);
+  }
+
+  TEARDOWN();
+}
+
+
+TEST(jump_tables_backward) {
+  // Test jump tables with backward jumps.
+  const int kNumCases = 512;
+
+  INIT_V8();
+  SETUP_SIZE(kNumCases * 5 * kInstructionSize + 8192);
+  START();
+
+  int32_t values[kNumCases];
+  isolate->random_number_generator()->NextBytes(values, sizeof(values));
+  int32_t results[kNumCases];
+  memset(results, 0, sizeof(results));
+  uintptr_t results_ptr = reinterpret_cast<uintptr_t>(results);
+
+  Label loop;
+  Label labels[kNumCases];
+  Label done;
+
+  const Register& index = x0;
+  STATIC_ASSERT(sizeof(results[0]) == 4);
+  const Register& value = w1;
+  const Register& target = x2;
+
+  __ Mov(index, 0);
+  __ Mov(target, results_ptr);
+  __ B(&loop);
+
+  for (int i = 0; i < kNumCases; ++i) {
+    __ Bind(&labels[i]);
+    __ Mov(value, values[i]);
+    __ B(&done);
+  }
+
+  __ Bind(&loop);
+  {
+    Assembler::BlockPoolsScope block_pools(&masm);
+    Label base;
+
+    __ Adr(x10, &base);
+    __ Ldr(x11, MemOperand(x10, index, LSL, kPointerSizeLog2));
+    __ Br(x11);
+    __ Bind(&base);
+    for (int i = 0; i < kNumCases; ++i) {
+      __ dcptr(&labels[i]);
+    }
+  }
+
+  __ Bind(&done);
+  __ Str(value, MemOperand(target, 4, PostIndex));
+  __ Add(index, index, 1);
+  __ Cmp(index, kNumCases);
+  __ B(ne, &loop);
+
+  END();
+
+  RUN();
+
+  for (int i = 0; i < kNumCases; ++i) {
+    CHECK_EQ(values[i], results[i]);
+  }
+
+  TEARDOWN();
+}
+
+
+TEST(internal_reference_linked) {
+  // Test internal reference when they are linked in a label chain.
+
+  INIT_V8();
+  SETUP();
+  START();
+
+  Label done;
+
+  __ Mov(x0, 0);
+  __ Cbnz(x0, &done);
+
+  {
+    Assembler::BlockPoolsScope block_pools(&masm);
+    Label base;
+
+    __ Adr(x10, &base);
+    __ Ldr(x11, MemOperand(x10));
+    __ Br(x11);
+    __ Bind(&base);
+    __ dcptr(&done);
+  }
+
+  // Dead code, just to extend the label chain.
+  __ B(&done);
+  __ dcptr(&done);
+  __ Tbz(x0, 1, &done);
+
+  __ Bind(&done);
+  __ Mov(x0, 1);
+
+  END();
+
+  RUN();
+
+  CHECK_EQUAL_64(0x1, x0);
 
   TEARDOWN();
 }

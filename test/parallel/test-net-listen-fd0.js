@@ -10,8 +10,8 @@ process.on('exit', function() {
 });
 
 // this should fail with an async EINVAL error, not throw an exception
-net.createServer(assert.fail).listen({fd:0}).on('error', function(e) {
-  switch(e.code) {
+net.createServer(common.fail).listen({fd:0}).on('error', function(e) {
+  switch (e.code) {
     case 'EINVAL':
     case 'ENOTSOCK':
       gotError = e;

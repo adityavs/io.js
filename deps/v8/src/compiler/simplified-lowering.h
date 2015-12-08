@@ -18,16 +18,16 @@ namespace compiler {
 class RepresentationChanger;
 class SourcePositionTable;
 
-class SimplifiedLowering FINAL {
+class SimplifiedLowering final {
  public:
   SimplifiedLowering(JSGraph* jsgraph, Zone* zone,
-                     SourcePositionTable* source_positions)
-      : jsgraph_(jsgraph), zone_(zone), source_positions_(source_positions) {}
+                     SourcePositionTable* source_positions);
   ~SimplifiedLowering() {}
 
   void LowerAllNodes();
 
   // TODO(titzer): These are exposed for direct testing. Use a friend class.
+  void DoAllocate(Node* node);
   void DoLoadField(Node* node);
   void DoStoreField(Node* node);
   // TODO(turbofan): The output_type can be removed once the result of the
@@ -37,7 +37,7 @@ class SimplifiedLowering FINAL {
   void DoStoreBuffer(Node* node);
   void DoLoadElement(Node* node);
   void DoStoreElement(Node* node);
-  void DoStringAdd(Node* node);
+  void DoShift(Node* node, Operator const* op);
   void DoStringEqual(Node* node);
   void DoStringLessThan(Node* node);
   void DoStringLessThanOrEqual(Node* node);
@@ -45,6 +45,7 @@ class SimplifiedLowering FINAL {
  private:
   JSGraph* const jsgraph_;
   Zone* const zone_;
+  Type* const zero_thirtyone_range_;
 
   // TODO(danno): SimplifiedLowering shouldn't know anything about the source
   // positions table, but must for now since there currently is no other way to
@@ -58,7 +59,7 @@ class SimplifiedLowering FINAL {
   Node* Untag(Node* node);
   Node* OffsetMinusTagConstant(int32_t offset);
   Node* ComputeIndex(const ElementAccess& access, Node* const key);
-  Node* StringComparison(Node* node, bool requires_ordering);
+  Node* StringComparison(Node* node);
   Node* Int32Div(Node* const node);
   Node* Int32Mod(Node* const node);
   Node* Uint32Div(Node* const node);
@@ -66,6 +67,7 @@ class SimplifiedLowering FINAL {
 
   friend class RepresentationSelector;
 
+  Isolate* isolate() { return jsgraph_->isolate(); }
   Zone* zone() { return jsgraph_->zone(); }
   JSGraph* jsgraph() { return jsgraph_; }
   Graph* graph() { return jsgraph()->graph(); }

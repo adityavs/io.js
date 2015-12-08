@@ -25,7 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-// Flags: --expose-debug-as debug --allow-natives-syntax --turbo-deoptimization
+// Flags: --expose-debug-as debug --allow-natives-syntax
 // The functions used for testing backtraces. They are at the top to make the
 // testing of source line/column easier.
 
@@ -165,6 +165,10 @@ function CheckScopeContent(content, number, exec_state) {
   // ignore this.
   var scope_size = scope.scopeObject().properties().length;
   if (!scope.scopeObject().property('arguments').isUndefined()) {
+    scope_size--;
+  }
+  // Ditto for 'this'.
+  if (!scope.scopeObject().property('this').isUndefined()) {
     scope_size--;
   }
   // Skip property with empty name.
@@ -1046,6 +1050,29 @@ listener_delegate = function(exec_state) {
   CheckScopeContent({e:'Exception'}, 0, exec_state);
 };
 catch_block_7();
+EndTest();
+
+
+BeginTest("Classes and methods 1");
+
+listener_delegate = function(exec_state) {
+  "use strict"
+  CheckScopeChain([debug.ScopeType.Local,
+                   debug.ScopeType.Script,
+                   debug.ScopeType.Global], exec_state);
+  CheckScopeContent({}, 1, exec_state);
+};
+
+(function() {
+  "use strict";
+  class C1 {
+    m() {
+      debugger;
+    }
+  }
+  new C1().m();
+})();
+
 EndTest();
 
 

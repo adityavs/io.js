@@ -14,8 +14,6 @@
 #include "src/execution.h"
 #include "src/objects.h"
 #include "src/parser.h"
-#include "src/smart-pointers.h"
-#include "src/snapshot.h"
 #include "src/unicode-inl.h"
 #include "src/utils.h"
 #include "src/vm-state.h"
@@ -313,7 +311,7 @@ void InterceptorHasOwnPropertyGetter(
 void InterceptorHasOwnPropertyGetterGC(
     Local<Name> name, const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
-  CcTest::heap()->CollectAllGarbage(i::Heap::kNoGCFlags);
+  CcTest::heap()->CollectAllGarbage();
 }
 
 }  // namespace
@@ -1008,10 +1006,11 @@ THREADED_TEST(PropertyHandlerInPrototype) {
 }
 
 
+bool is_bootstrapping = false;
 static void PrePropertyHandlerGet(
     Local<Name> key, const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
-  if (v8_str("pre")->Equals(key)) {
+  if (!is_bootstrapping && v8_str("pre")->Equals(key)) {
     info.GetReturnValue().Set(v8_str("PrePropertyHandler: pre"));
   }
 }
@@ -1019,7 +1018,7 @@ static void PrePropertyHandlerGet(
 
 static void PrePropertyHandlerQuery(
     Local<Name> key, const v8::PropertyCallbackInfo<v8::Integer>& info) {
-  if (v8_str("pre")->Equals(key)) {
+  if (!is_bootstrapping && v8_str("pre")->Equals(key)) {
     info.GetReturnValue().Set(static_cast<int32_t>(v8::None));
   }
 }
@@ -1031,7 +1030,9 @@ THREADED_TEST(PrePropertyHandler) {
   v8::Handle<v8::FunctionTemplate> desc = v8::FunctionTemplate::New(isolate);
   desc->InstanceTemplate()->SetHandler(v8::NamedPropertyHandlerConfiguration(
       PrePropertyHandlerGet, 0, PrePropertyHandlerQuery));
+  is_bootstrapping = true;
   LocalContext env(NULL, desc->InstanceTemplate());
+  is_bootstrapping = false;
   CompileRun("var pre = 'Object: pre'; var on = 'Object: on';");
   v8::Handle<Value> result_pre = CompileRun("pre");
   CHECK(v8_str("PrePropertyHandler: pre")->Equals(result_pre));
@@ -1659,6 +1660,12 @@ THREADED_TEST(IndexedInterceptorWithNoSetter) {
 }
 
 
+static bool AccessAlwaysBlocked(Local<v8::Object> global, Local<Value> name,
+                                v8::AccessType type, Local<Value> data) {
+  return false;
+}
+
+
 THREADED_TEST(IndexedInterceptorWithAccessorCheck) {
   v8::Isolate* isolate = CcTest::isolate();
   v8::HandleScope scope(isolate);
@@ -1666,9 +1673,10 @@ THREADED_TEST(IndexedInterceptorWithAccessorCheck) {
   templ->SetHandler(
       v8::IndexedPropertyHandlerConfiguration(IdentityIndexedPropertyGetter));
 
+  templ->SetAccessCheckCallbacks(AccessAlwaysBlocked, nullptr);
+
   LocalContext context;
   Local<v8::Object> obj = templ->NewInstance();
-  obj->TurnOnAccessCheck();
   context->Global()->Set(v8_str("obj"), obj);
 
   const char* code =
@@ -1681,46 +1689,6 @@ THREADED_TEST(IndexedInterceptorWithAccessorCheck) {
       "  } catch (e) {"
       "    /* pass */"
       "  }"
-      "}"
-      "result";
-  ExpectString(code, "PASSED");
-}
-
-
-THREADED_TEST(IndexedInterceptorWithAccessorCheckSwitchedOn) {
-  i::FLAG_allow_natives_syntax = true;
-  v8::Isolate* isolate = CcTest::isolate();
-  v8::HandleScope scope(isolate);
-  Local<ObjectTemplate> templ = ObjectTemplate::New(isolate);
-  templ->SetHandler(
-      v8::IndexedPropertyHandlerConfiguration(IdentityIndexedPropertyGetter));
-
-  LocalContext context;
-  Local<v8::Object> obj = templ->NewInstance();
-  context->Global()->Set(v8_str("obj"), obj);
-
-  const char* code =
-      "var result = 'PASSED';"
-      "for (var i = 0; i < 100; i++) {"
-      "  var expected = i;"
-      "  if (i == 5) {"
-      "    %EnableAccessChecks(obj);"
-      "  }"
-      "  try {"
-      "    var v = obj[i];"
-      "    if (i == 5) {"
-      "      result = 'Should not have reached this!';"
-      "      break;"
-      "    } else if (v != expected) {"
-      "      result = 'Wrong value ' + v + ' at iteration ' + i;"
-      "      break;"
-      "    }"
-      "  } catch (e) {"
-      "    if (i != 5) {"
-      "      result = e;"
-      "    }"
-      "  }"
-      "  if (i == 5) %DisableAccessChecks(obj);"
       "}"
       "result";
   ExpectString(code, "PASSED");
@@ -2022,9 +1990,9 @@ THREADED_TEST(Enumerators) {
       "k.a = 0;"
       "k[5] = 0;"
       "k.b = 0;"
-      "k[4294967295] = 0;"
+      "k[4294967294] = 0;"
       "k.c = 0;"
-      "k[4294967296] = 0;"
+      "k[4294967295] = 0;"
       "k.d = 0;"
       "k[140000] = 0;"
       "k.e = 0;"
@@ -2047,7 +2015,7 @@ THREADED_TEST(Enumerators) {
   CHECK(v8_str("10")->Equals(result->Get(v8::Integer::New(isolate, 1))));
   CHECK(v8_str("140000")->Equals(result->Get(v8::Integer::New(isolate, 2))));
   CHECK(
-      v8_str("4294967295")->Equals(result->Get(v8::Integer::New(isolate, 3))));
+      v8_str("4294967294")->Equals(result->Get(v8::Integer::New(isolate, 3))));
   // Indexed interceptor properties in the order they are returned
   // from the enumerator interceptor.
   CHECK(v8_str("0")->Equals(result->Get(v8::Integer::New(isolate, 4))));
@@ -2057,7 +2025,7 @@ THREADED_TEST(Enumerators) {
   CHECK(v8_str("b")->Equals(result->Get(v8::Integer::New(isolate, 7))));
   CHECK(v8_str("c")->Equals(result->Get(v8::Integer::New(isolate, 8))));
   CHECK(
-      v8_str("4294967296")->Equals(result->Get(v8::Integer::New(isolate, 9))));
+      v8_str("4294967295")->Equals(result->Get(v8::Integer::New(isolate, 9))));
   CHECK(v8_str("d")->Equals(result->Get(v8::Integer::New(isolate, 10))));
   CHECK(v8_str("e")->Equals(result->Get(v8::Integer::New(isolate, 11))));
   CHECK(v8_str("30000000000")
@@ -2534,7 +2502,8 @@ static int interceptor_call_count = 0;
 static void InterceptorICRefErrorGetter(
     Local<Name> name, const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
-  if (v8_str("x")->Equals(name) && interceptor_call_count++ < 20) {
+  if (!is_bootstrapping && v8_str("x")->Equals(name) &&
+      interceptor_call_count++ < 20) {
     info.GetReturnValue().Set(call_ic_function2);
   }
 }
@@ -2549,7 +2518,9 @@ THREADED_TEST(InterceptorICReferenceErrors) {
   v8::Handle<v8::ObjectTemplate> templ = ObjectTemplate::New(isolate);
   templ->SetHandler(
       v8::NamedPropertyHandlerConfiguration(InterceptorICRefErrorGetter));
+  is_bootstrapping = true;
   LocalContext context(0, templ, v8::Handle<Value>());
+  is_bootstrapping = false;
   call_ic_function2 = v8_compile("function h(x) { return x; }; h")->Run();
   v8::Handle<Value> value = CompileRun(
       "function f() {"
@@ -2578,6 +2549,7 @@ static int interceptor_ic_exception_get_count = 0;
 static void InterceptorICExceptionGetter(
     Local<Name> name, const v8::PropertyCallbackInfo<v8::Value>& info) {
   ApiTestFuzzer::Fuzz();
+  if (is_bootstrapping) return;
   if (v8_str("x")->Equals(name) && ++interceptor_ic_exception_get_count < 20) {
     info.GetReturnValue().Set(call_ic_function3);
   }
@@ -2597,7 +2569,9 @@ THREADED_TEST(InterceptorICGetterExceptions) {
   v8::Handle<v8::ObjectTemplate> templ = ObjectTemplate::New(isolate);
   templ->SetHandler(
       v8::NamedPropertyHandlerConfiguration(InterceptorICExceptionGetter));
+  is_bootstrapping = true;
   LocalContext context(0, templ, v8::Handle<Value>());
+  is_bootstrapping = false;
   call_ic_function3 = v8_compile("function h(x) { return x; }; h")->Run();
   v8::Handle<Value> value = CompileRun(
       "function f() {"
@@ -2934,16 +2908,8 @@ struct AccessCheckData {
 };
 
 
-bool SimpleNamedAccessChecker(Local<v8::Object> global, Local<Value> name,
-                              v8::AccessType type, Local<Value> data) {
-  auto access_check_data = GetWrappedObject<AccessCheckData>(data);
-  access_check_data->count++;
-  return access_check_data->result;
-}
-
-
-bool SimpleIndexedAccessChecker(Local<v8::Object> global, uint32_t index,
-                                v8::AccessType type, Local<Value> data) {
+bool SimpleAccessChecker(Local<v8::Object> global, Local<Value> name,
+                         v8::AccessType type, Local<Value> data) {
   auto access_check_data = GetWrappedObject<AccessCheckData>(data);
   access_check_data->count++;
   return access_check_data->result;
@@ -2984,7 +2950,7 @@ THREADED_TEST(NamedAllCanReadInterceptor) {
   LocalContext context;
 
   AccessCheckData access_check_data;
-  access_check_data.result = false;
+  access_check_data.result = true;
   access_check_data.count = 0;
 
   ShouldInterceptData intercept_data_0;
@@ -3015,8 +2981,8 @@ THREADED_TEST(NamedAllCanReadInterceptor) {
 
   auto checked = v8::ObjectTemplate::New(isolate);
   checked->SetAccessCheckCallbacks(
-      SimpleNamedAccessChecker, nullptr,
-      BuildWrappedObject<AccessCheckData>(isolate, &access_check_data), false);
+      SimpleAccessChecker, nullptr,
+      BuildWrappedObject<AccessCheckData>(isolate, &access_check_data));
 
   context->Global()->Set(v8_str("intercepted_0"), intercepted_0->NewInstance());
   context->Global()->Set(v8_str("intercepted_1"), intercepted_1->NewInstance());
@@ -3027,20 +2993,30 @@ THREADED_TEST(NamedAllCanReadInterceptor) {
       "checked.__proto__ = intercepted_1;"
       "intercepted_1.__proto__ = intercepted_0;");
 
-  checked_instance->TurnOnAccessCheck();
-  CHECK_EQ(0, access_check_data.count);
+  CHECK_EQ(3, access_check_data.count);
 
-  access_check_data.result = true;
   ExpectInt32("checked.whatever", 17);
-  CHECK_EQ(1, access_check_data.count);
+  CHECK(!CompileRun("Object.getOwnPropertyDescriptor(checked, 'whatever')")
+             ->IsUndefined());
+  CHECK_EQ(5, access_check_data.count);
 
   access_check_data.result = false;
   ExpectInt32("checked.whatever", intercept_data_0.value);
-  CHECK_EQ(2, access_check_data.count);
+  {
+    v8::TryCatch try_catch(isolate);
+    CompileRun("Object.getOwnPropertyDescriptor(checked, 'whatever')");
+    CHECK(try_catch.HasCaught());
+  }
+  CHECK_EQ(7, access_check_data.count);
 
   intercept_data_1.should_intercept = true;
   ExpectInt32("checked.whatever", intercept_data_1.value);
-  CHECK_EQ(3, access_check_data.count);
+  {
+    v8::TryCatch try_catch(isolate);
+    CompileRun("Object.getOwnPropertyDescriptor(checked, 'whatever')");
+    CHECK(try_catch.HasCaught());
+  }
+  CHECK_EQ(9, access_check_data.count);
 }
 
 
@@ -3050,7 +3026,7 @@ THREADED_TEST(IndexedAllCanReadInterceptor) {
   LocalContext context;
 
   AccessCheckData access_check_data;
-  access_check_data.result = false;
+  access_check_data.result = true;
   access_check_data.count = 0;
 
   ShouldInterceptData intercept_data_0;
@@ -3081,8 +3057,8 @@ THREADED_TEST(IndexedAllCanReadInterceptor) {
 
   auto checked = v8::ObjectTemplate::New(isolate);
   checked->SetAccessCheckCallbacks(
-      nullptr, SimpleIndexedAccessChecker,
-      BuildWrappedObject<AccessCheckData>(isolate, &access_check_data), false);
+      SimpleAccessChecker, nullptr,
+      BuildWrappedObject<AccessCheckData>(isolate, &access_check_data));
 
   context->Global()->Set(v8_str("intercepted_0"), intercepted_0->NewInstance());
   context->Global()->Set(v8_str("intercepted_1"), intercepted_1->NewInstance());
@@ -3093,18 +3069,219 @@ THREADED_TEST(IndexedAllCanReadInterceptor) {
       "checked.__proto__ = intercepted_1;"
       "intercepted_1.__proto__ = intercepted_0;");
 
-  checked_instance->TurnOnAccessCheck();
-  CHECK_EQ(0, access_check_data.count);
+  CHECK_EQ(3, access_check_data.count);
 
   access_check_data.result = true;
   ExpectInt32("checked[15]", 17);
-  CHECK_EQ(1, access_check_data.count);
+  CHECK(!CompileRun("Object.getOwnPropertyDescriptor(checked, '15')")
+             ->IsUndefined());
+  CHECK_EQ(5, access_check_data.count);
 
   access_check_data.result = false;
   ExpectInt32("checked[15]", intercept_data_0.value);
-  CHECK_EQ(2, access_check_data.count);
+  {
+    v8::TryCatch try_catch(isolate);
+    CompileRun("Object.getOwnPropertyDescriptor(checked, '15')");
+    CHECK(try_catch.HasCaught());
+  }
+  CHECK_EQ(7, access_check_data.count);
 
   intercept_data_1.should_intercept = true;
   ExpectInt32("checked[15]", intercept_data_1.value);
-  CHECK_EQ(3, access_check_data.count);
+  {
+    v8::TryCatch try_catch(isolate);
+    CompileRun("Object.getOwnPropertyDescriptor(checked, '15')");
+    CHECK(try_catch.HasCaught());
+  }
+  CHECK_EQ(9, access_check_data.count);
+}
+
+
+THREADED_TEST(NonMaskingInterceptorOwnProperty) {
+  auto isolate = CcTest::isolate();
+  v8::HandleScope handle_scope(isolate);
+  LocalContext context;
+
+  ShouldInterceptData intercept_data;
+  intercept_data.value = 239;
+  intercept_data.should_intercept = true;
+
+  auto interceptor_templ = v8::ObjectTemplate::New(isolate);
+  v8::NamedPropertyHandlerConfiguration conf(ShouldNamedInterceptor);
+  conf.flags = v8::PropertyHandlerFlags::kNonMasking;
+  conf.data = BuildWrappedObject<ShouldInterceptData>(isolate, &intercept_data);
+  interceptor_templ->SetHandler(conf);
+
+  auto interceptor = interceptor_templ->NewInstance();
+  context->Global()->Set(v8_str("obj"), interceptor);
+
+  ExpectInt32("obj.whatever", 239);
+
+  CompileRun("obj.whatever = 4;");
+  ExpectInt32("obj.whatever", 4);
+
+  CompileRun("delete obj.whatever;");
+  ExpectInt32("obj.whatever", 239);
+}
+
+
+THREADED_TEST(NonMaskingInterceptorPrototypeProperty) {
+  auto isolate = CcTest::isolate();
+  v8::HandleScope handle_scope(isolate);
+  LocalContext context;
+
+  ShouldInterceptData intercept_data;
+  intercept_data.value = 239;
+  intercept_data.should_intercept = true;
+
+  auto interceptor_templ = v8::ObjectTemplate::New(isolate);
+  v8::NamedPropertyHandlerConfiguration conf(ShouldNamedInterceptor);
+  conf.flags = v8::PropertyHandlerFlags::kNonMasking;
+  conf.data = BuildWrappedObject<ShouldInterceptData>(isolate, &intercept_data);
+  interceptor_templ->SetHandler(conf);
+
+  auto interceptor = interceptor_templ->NewInstance();
+  context->Global()->Set(v8_str("obj"), interceptor);
+
+  ExpectInt32("obj.whatever", 239);
+
+  CompileRun("obj.__proto__ = {'whatever': 4};");
+  ExpectInt32("obj.whatever", 4);
+
+  CompileRun("delete obj.__proto__.whatever;");
+  ExpectInt32("obj.whatever", 239);
+}
+
+
+THREADED_TEST(NonMaskingInterceptorPrototypePropertyIC) {
+  auto isolate = CcTest::isolate();
+  v8::HandleScope handle_scope(isolate);
+  LocalContext context;
+
+  ShouldInterceptData intercept_data;
+  intercept_data.value = 239;
+  intercept_data.should_intercept = true;
+
+  auto interceptor_templ = v8::ObjectTemplate::New(isolate);
+  v8::NamedPropertyHandlerConfiguration conf(ShouldNamedInterceptor);
+  conf.flags = v8::PropertyHandlerFlags::kNonMasking;
+  conf.data = BuildWrappedObject<ShouldInterceptData>(isolate, &intercept_data);
+  interceptor_templ->SetHandler(conf);
+
+  auto interceptor = interceptor_templ->NewInstance();
+  context->Global()->Set(v8_str("obj"), interceptor);
+
+  CompileRun(
+      "outer = {};"
+      "outer.__proto__ = obj;"
+      "function f(obj) {"
+      "  var x;"
+      "  for (var i = 0; i < 4; i++) {"
+      "    x = obj.whatever;"
+      "  }"
+      "  return x;"
+      "}");
+
+  // Receiver == holder.
+  CompileRun("obj.__proto__ = null;");
+  ExpectInt32("f(obj)", 239);
+  ExpectInt32("f(outer)", 239);
+
+  // Receiver != holder.
+  CompileRun("Object.setPrototypeOf(obj, {});");
+  ExpectInt32("f(obj)", 239);
+  ExpectInt32("f(outer)", 239);
+
+  // Masked value on prototype.
+  CompileRun("obj.__proto__.whatever = 4;");
+  CompileRun("obj.__proto__.__proto__ = { 'whatever' : 5 };");
+  ExpectInt32("f(obj)", 4);
+  ExpectInt32("f(outer)", 4);
+
+  // Masked value on prototype prototype.
+  CompileRun("delete obj.__proto__.whatever;");
+  ExpectInt32("f(obj)", 5);
+  ExpectInt32("f(outer)", 5);
+
+  // Reset.
+  CompileRun("delete obj.__proto__.__proto__.whatever;");
+  ExpectInt32("f(obj)", 239);
+  ExpectInt32("f(outer)", 239);
+
+  // Masked value on self.
+  CompileRun("obj.whatever = 4;");
+  ExpectInt32("f(obj)", 4);
+  ExpectInt32("f(outer)", 4);
+
+  // Reset.
+  CompileRun("delete obj.whatever;");
+  ExpectInt32("f(obj)", 239);
+  ExpectInt32("f(outer)", 239);
+
+  CompileRun("outer.whatever = 4;");
+  ExpectInt32("f(obj)", 239);
+  ExpectInt32("f(outer)", 4);
+}
+
+
+namespace {
+
+void DatabaseGetter(Local<Name> name,
+                    const v8::PropertyCallbackInfo<Value>& info) {
+  ApiTestFuzzer::Fuzz();
+  auto context = info.GetIsolate()->GetCurrentContext();
+  Local<v8::Object> db = info.Holder()
+                             ->GetRealNamedProperty(context, v8_str("db"))
+                             .ToLocalChecked()
+                             .As<v8::Object>();
+  if (!db->Has(context, name).FromJust()) return;
+  info.GetReturnValue().Set(db->Get(context, name).ToLocalChecked());
+}
+
+
+void DatabaseSetter(Local<Name> name, Local<Value> value,
+                    const v8::PropertyCallbackInfo<Value>& info) {
+  ApiTestFuzzer::Fuzz();
+  auto context = info.GetIsolate()->GetCurrentContext();
+  if (name->Equals(v8_str("db"))) return;
+  Local<v8::Object> db = info.Holder()
+                             ->GetRealNamedProperty(context, v8_str("db"))
+                             .ToLocalChecked()
+                             .As<v8::Object>();
+  db->Set(context, name, value).FromJust();
+  info.GetReturnValue().Set(value);
+}
+}
+
+
+THREADED_TEST(NonMaskingInterceptorGlobalEvalRegression) {
+  auto isolate = CcTest::isolate();
+  v8::HandleScope handle_scope(isolate);
+  LocalContext context;
+
+  auto interceptor_templ = v8::ObjectTemplate::New(isolate);
+  v8::NamedPropertyHandlerConfiguration conf(DatabaseGetter, DatabaseSetter);
+  conf.flags = v8::PropertyHandlerFlags::kNonMasking;
+  interceptor_templ->SetHandler(conf);
+
+  context->Global()->Set(v8_str("intercepted_1"),
+                         interceptor_templ->NewInstance());
+  context->Global()->Set(v8_str("intercepted_2"),
+                         interceptor_templ->NewInstance());
+
+  // Init dbs.
+  CompileRun(
+      "intercepted_1.db = {};"
+      "intercepted_2.db = {};");
+
+  ExpectInt32(
+      "var obj = intercepted_1;"
+      "obj.x = 4;"
+      "eval('obj.x');"
+      "eval('obj.x');"
+      "eval('obj.x');"
+      "obj = intercepted_2;"
+      "obj.x = 9;"
+      "eval('obj.x');",
+      9);
 }

@@ -55,8 +55,7 @@ BasicBlockProfiler::Data* BasicBlockInstrumentor::Instrument(
   BasicBlockProfiler::Data* data =
       info->isolate()->GetOrCreateBasicBlockProfiler()->NewData(n_blocks);
   // Set the function name.
-  if (!info->shared_info().is_null() &&
-      info->shared_info()->name()->IsString()) {
+  if (info->has_shared_info() && info->shared_info()->name()->IsString()) {
     std::ostringstream os;
     String::cast(info->shared_info()->name())->PrintUC16(os);
     data->SetFunctionName(&os);
@@ -82,11 +81,12 @@ BasicBlockProfiler::Data* BasicBlockInstrumentor::Instrument(
     // Construct increment operation.
     Node* base = graph->NewNode(
         PointerConstant(&common, data->GetCounterAddress(block_number)));
-    Node* load = graph->NewNode(machine.Load(kMachUint32), base, zero);
+    Node* load = graph->NewNode(machine.Load(kMachUint32), base, zero,
+                                graph->start(), graph->start());
     Node* inc = graph->NewNode(machine.Int32Add(), load, one);
     Node* store = graph->NewNode(
         machine.Store(StoreRepresentation(kMachUint32, kNoWriteBarrier)), base,
-        zero, inc);
+        zero, inc, graph->start(), graph->start());
     // Insert the new nodes.
     static const int kArraySize = 6;
     Node* to_insert[kArraySize] = {zero, one, base, load, inc, store};

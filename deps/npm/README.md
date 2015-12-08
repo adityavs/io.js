@@ -16,7 +16,7 @@ and prior, clone the git repo and dig through the old tags and branches.
 
 ## Super Easy Install
 
-npm comes with [node](http://nodejs.org/download/) now.
+npm is bundled with [node](http://nodejs.org/download/).
 
 ### Windows Computers
 
@@ -208,7 +208,7 @@ Any data published to The npm Registry (including user account
 information) may be removed or modified at the sole discretion of the
 npm server administrators.
 
-### In plainer english
+### In plainer English
 
 npm is the property of npm, Inc.
 

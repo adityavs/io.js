@@ -2,13 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <stdarg.h>
+#include "src/prettyprinter.h"
 
-#include "src/v8.h"
+#include <stdarg.h>
 
 #include "src/ast-value-factory.h"
 #include "src/base/platform/platform.h"
-#include "src/prettyprinter.h"
 #include "src/scopes.h"
 
 namespace v8 {
@@ -100,33 +99,11 @@ void CallPrinter::VisitVariableDeclaration(VariableDeclaration* node) {}
 void CallPrinter::VisitFunctionDeclaration(FunctionDeclaration* node) {}
 
 
-void CallPrinter::VisitModuleDeclaration(ModuleDeclaration* node) {
-  Find(node->module());
-}
-
-
 void CallPrinter::VisitImportDeclaration(ImportDeclaration* node) {
-  Find(node->module());
 }
 
 
 void CallPrinter::VisitExportDeclaration(ExportDeclaration* node) {}
-
-
-void CallPrinter::VisitModuleLiteral(ModuleLiteral* node) {
-  VisitBlock(node->body());
-}
-
-
-void CallPrinter::VisitModulePath(ModulePath* node) { Find(node->module()); }
-
-
-void CallPrinter::VisitModuleUrl(ModuleUrl* node) {}
-
-
-void CallPrinter::VisitModuleStatement(ModuleStatement* node) {
-  Find(node->body());
-}
 
 
 void CallPrinter::VisitExpressionStatement(ExpressionStatement* node) {
@@ -135,6 +112,12 @@ void CallPrinter::VisitExpressionStatement(ExpressionStatement* node) {
 
 
 void CallPrinter::VisitEmptyStatement(EmptyStatement* node) {}
+
+
+void CallPrinter::VisitSloppyBlockFunctionStatement(
+    SloppyBlockFunctionStatement* node) {
+  Find(node->statement());
+}
 
 
 void CallPrinter::VisitIfStatement(IfStatement* node) {
@@ -326,7 +309,7 @@ void CallPrinter::VisitCall(Call* node) {
 
 
 void CallPrinter::VisitCallNew(CallNew* node) {
-  bool was_found = !found_ && node->expression()->position() == position_;
+  bool was_found = !found_ && node->position() == position_;
   if (was_found) found_ = true;
   Find(node->expression(), was_found);
   FindArguments(node->arguments());
@@ -376,10 +359,25 @@ void CallPrinter::VisitCompareOperation(CompareOperation* node) {
 }
 
 
+void CallPrinter::VisitSpread(Spread* node) {
+  Print("(...");
+  Find(node->expression(), true);
+  Print(")");
+}
+
+
+void CallPrinter::VisitEmptyParentheses(EmptyParentheses* node) {
+  UNREACHABLE();
+}
+
+
 void CallPrinter::VisitThisFunction(ThisFunction* node) {}
 
 
-void CallPrinter::VisitSuperReference(SuperReference* node) {}
+void CallPrinter::VisitSuperPropertyReference(SuperPropertyReference* node) {}
+
+
+void CallPrinter::VisitSuperCallReference(SuperCallReference* node) {}
 
 
 void CallPrinter::FindStatements(ZoneList<Statement*>* statements) {
@@ -431,6 +429,17 @@ void CallPrinter::PrintLiteral(const AstRawString* value, bool quote) {
 
 #ifdef DEBUG
 
+// A helper for ast nodes that use FeedbackVectorICSlots.
+static int FormatICSlotNode(Vector<char>* buf, Expression* node,
+                            const char* node_name, FeedbackVectorICSlot slot) {
+  int pos = SNPrintF(*buf, "%s", node_name);
+  if (!slot.IsInvalid()) {
+    pos = SNPrintF(*buf + pos, " ICSlot(%d)", slot.ToInt());
+  }
+  return pos;
+}
+
+
 PrettyPrinter::PrettyPrinter(Isolate* isolate, Zone* zone) {
   output_ = NULL;
   size_ = 0;
@@ -445,10 +454,10 @@ PrettyPrinter::~PrettyPrinter() {
 
 
 void PrettyPrinter::VisitBlock(Block* node) {
-  if (!node->is_initializer_block()) Print("{ ");
+  if (!node->ignore_completion_value()) Print("{ ");
   PrintStatements(node->statements());
   if (node->statements()->length() > 0) Print(" ");
-  if (!node->is_initializer_block()) Print("}");
+  if (!node->ignore_completion_value()) Print("}");
 }
 
 
@@ -468,20 +477,11 @@ void PrettyPrinter::VisitFunctionDeclaration(FunctionDeclaration* node) {
 }
 
 
-void PrettyPrinter::VisitModuleDeclaration(ModuleDeclaration* node) {
-  Print("module ");
-  PrintLiteral(node->proxy()->name(), false);
-  Print(" = ");
-  Visit(node->module());
-  Print(";");
-}
-
-
 void PrettyPrinter::VisitImportDeclaration(ImportDeclaration* node) {
   Print("import ");
   PrintLiteral(node->proxy()->name(), false);
   Print(" from ");
-  Visit(node->module());
+  PrintLiteral(node->module_specifier()->string(), true);
   Print(";");
 }
 
@@ -493,30 +493,6 @@ void PrettyPrinter::VisitExportDeclaration(ExportDeclaration* node) {
 }
 
 
-void PrettyPrinter::VisitModuleLiteral(ModuleLiteral* node) {
-  VisitBlock(node->body());
-}
-
-
-void PrettyPrinter::VisitModulePath(ModulePath* node) {
-  Visit(node->module());
-  Print(".");
-  PrintLiteral(node->name(), false);
-}
-
-
-void PrettyPrinter::VisitModuleUrl(ModuleUrl* node) {
-  Print("at ");
-  PrintLiteral(node->url(), true);
-}
-
-
-void PrettyPrinter::VisitModuleStatement(ModuleStatement* node) {
-  Print("module ");
-  Visit(node->body());
-}
-
-
 void PrettyPrinter::VisitExpressionStatement(ExpressionStatement* node) {
   Visit(node->expression());
   Print(";");
@@ -525,6 +501,12 @@ void PrettyPrinter::VisitExpressionStatement(ExpressionStatement* node) {
 
 void PrettyPrinter::VisitEmptyStatement(EmptyStatement* node) {
   Print(";");
+}
+
+
+void PrettyPrinter::VisitSloppyBlockFunctionStatement(
+    SloppyBlockFunctionStatement* node) {
+  Visit(node->statement());
 }
 
 
@@ -764,6 +746,7 @@ void PrettyPrinter::PrintObjectLiteralProperty(
 
 void PrettyPrinter::VisitArrayLiteral(ArrayLiteral* node) {
   Print("[ ");
+  Print(" literal_index = %d", node->literal_index());
   for (int i = 0; i < node->values()->length(); i++) {
     if (i != 0) Print(",");
     Visit(node->values()->at(i));
@@ -828,8 +811,7 @@ void PrettyPrinter::VisitCallNew(CallNew* node) {
 
 
 void PrettyPrinter::VisitCallRuntime(CallRuntime* node) {
-  Print("%%");
-  PrintLiteral(node->name(), false);
+  Print("%%%s\n", node->debug_name());
   PrintArguments(node->arguments());
 }
 
@@ -871,13 +853,30 @@ void PrettyPrinter::VisitCompareOperation(CompareOperation* node) {
 }
 
 
+void PrettyPrinter::VisitSpread(Spread* node) {
+  Print("(...");
+  Visit(node->expression());
+  Print(")");
+}
+
+
+void PrettyPrinter::VisitEmptyParentheses(EmptyParentheses* node) {
+  Print("()");
+}
+
+
 void PrettyPrinter::VisitThisFunction(ThisFunction* node) {
   Print("<this-function>");
 }
 
 
-void PrettyPrinter::VisitSuperReference(SuperReference* node) {
-  Print("<super-reference>");
+void PrettyPrinter::VisitSuperPropertyReference(SuperPropertyReference* node) {
+  Print("<super-property-reference>");
+}
+
+
+void PrettyPrinter::VisitSuperCallReference(SuperCallReference* node) {
+  Print("<super-call-reference>");
 }
 
 
@@ -907,7 +906,7 @@ const char* PrettyPrinter::PrintProgram(FunctionLiteral* program) {
 
 void PrettyPrinter::PrintOut(Isolate* isolate, Zone* zone, AstNode* node) {
   PrettyPrinter printer(isolate, zone);
-  PrintF("%s", printer.Print(node));
+  PrintF("%s\n", printer.Print(node));
 }
 
 
@@ -1179,7 +1178,8 @@ void AstPrinter::PrintArguments(ZoneList<Expression*>* arguments) {
 
 
 void AstPrinter::VisitBlock(Block* node) {
-  const char* block_txt = node->is_initializer_block() ? "BLOCK INIT" : "BLOCK";
+  const char* block_txt =
+      node->ignore_completion_value() ? "BLOCK NOCOMPLETIONS" : "BLOCK";
   IndentedScope indent(this, block_txt);
   PrintStatements(node->statements());
 }
@@ -1203,47 +1203,16 @@ void AstPrinter::VisitFunctionDeclaration(FunctionDeclaration* node) {
 }
 
 
-void AstPrinter::VisitModuleDeclaration(ModuleDeclaration* node) {
-  IndentedScope indent(this, "MODULE");
-  PrintLiteralIndented("NAME", node->proxy()->name(), true);
-  Visit(node->module());
-}
-
-
 void AstPrinter::VisitImportDeclaration(ImportDeclaration* node) {
   IndentedScope indent(this, "IMPORT");
   PrintLiteralIndented("NAME", node->proxy()->name(), true);
-  Visit(node->module());
+  PrintLiteralIndented("FROM", node->module_specifier()->string(), true);
 }
 
 
 void AstPrinter::VisitExportDeclaration(ExportDeclaration* node) {
   IndentedScope indent(this, "EXPORT ");
   PrintLiteral(node->proxy()->name(), true);
-}
-
-
-void AstPrinter::VisitModuleLiteral(ModuleLiteral* node) {
-  IndentedScope indent(this, "MODULE LITERAL");
-  VisitBlock(node->body());
-}
-
-
-void AstPrinter::VisitModulePath(ModulePath* node) {
-  IndentedScope indent(this, "MODULE PATH");
-  PrintIndentedVisit("MODULE PATH PARENT", node->module());
-  PrintLiteralIndented("NAME", node->name(), true);
-}
-
-
-void AstPrinter::VisitModuleUrl(ModuleUrl* node) {
-  PrintLiteralIndented("URL", node->url(), true);
-}
-
-
-void AstPrinter::VisitModuleStatement(ModuleStatement* node) {
-  IndentedScope indent(this, "MODULE STATEMENT");
-  PrintStatements(node->body()->statements());
 }
 
 
@@ -1255,6 +1224,12 @@ void AstPrinter::VisitExpressionStatement(ExpressionStatement* node) {
 
 void AstPrinter::VisitEmptyStatement(EmptyStatement* node) {
   IndentedScope indent(this, "EMPTY");
+}
+
+
+void AstPrinter::VisitSloppyBlockFunctionStatement(
+    SloppyBlockFunctionStatement* node) {
+  Visit(node->statement());
 }
 
 
@@ -1368,7 +1343,7 @@ void AstPrinter::VisitTryCatchStatement(TryCatchStatement* node) {
 
 
 void AstPrinter::VisitTryFinallyStatement(TryFinallyStatement* node) {
-  IndentedScope indent(this, "TRY FINALLY");
+  IndentedScope indent(this, "TRY finalLY");
   PrintIndentedVisit("TRY", node->try_block());
   PrintIndentedVisit("FINALLY", node->finally_block());
 }
@@ -1393,7 +1368,48 @@ void AstPrinter::VisitFunctionLiteral(FunctionLiteral* node) {
 
 void AstPrinter::VisitClassLiteral(ClassLiteral* node) {
   IndentedScope indent(this, "CLASS LITERAL");
-  PrintLiteralIndented("NAME", node->name(), false);
+  if (node->raw_name() != nullptr) {
+    PrintLiteralIndented("NAME", node->name(), false);
+  }
+  if (node->extends() != nullptr) {
+    PrintIndentedVisit("EXTENDS", node->extends());
+  }
+  PrintProperties(node->properties());
+}
+
+
+void AstPrinter::PrintProperties(
+    ZoneList<ObjectLiteral::Property*>* properties) {
+  for (int i = 0; i < properties->length(); i++) {
+    ObjectLiteral::Property* property = properties->at(i);
+    const char* prop_kind = nullptr;
+    switch (property->kind()) {
+      case ObjectLiteral::Property::CONSTANT:
+        prop_kind = "CONSTANT";
+        break;
+      case ObjectLiteral::Property::COMPUTED:
+        prop_kind = "COMPUTED";
+        break;
+      case ObjectLiteral::Property::MATERIALIZED_LITERAL:
+        prop_kind = "MATERIALIZED_LITERAL";
+        break;
+      case ObjectLiteral::Property::PROTOTYPE:
+        prop_kind = "PROTOTYPE";
+        break;
+      case ObjectLiteral::Property::GETTER:
+        prop_kind = "GETTER";
+        break;
+      case ObjectLiteral::Property::SETTER:
+        prop_kind = "SETTER";
+        break;
+    }
+    EmbeddedVector<char, 128> buf;
+    SNPrintF(buf, "PROPERTY%s - %s", property->is_static() ? " - STATIC" : "",
+             prop_kind);
+    IndentedScope prop(this, buf.start());
+    PrintIndentedVisit("KEY", properties->at(i)->key());
+    PrintIndentedVisit("VALUE", properties->at(i)->value());
+  }
 }
 
 
@@ -1419,6 +1435,9 @@ void AstPrinter::VisitLiteral(Literal* node) {
 
 void AstPrinter::VisitRegExpLiteral(RegExpLiteral* node) {
   IndentedScope indent(this, "REGEXP LITERAL");
+  EmbeddedVector<char, 128> buf;
+  SNPrintF(buf, "literal_index = %d\n", node->literal_index());
+  PrintIndented(buf.start());
   PrintLiteralIndented("PATTERN", node->pattern(), false);
   PrintLiteralIndented("FLAGS", node->flags(), false);
 }
@@ -1426,39 +1445,19 @@ void AstPrinter::VisitRegExpLiteral(RegExpLiteral* node) {
 
 void AstPrinter::VisitObjectLiteral(ObjectLiteral* node) {
   IndentedScope indent(this, "OBJ LITERAL");
-  for (int i = 0; i < node->properties()->length(); i++) {
-    const char* prop_kind = NULL;
-    switch (node->properties()->at(i)->kind()) {
-      case ObjectLiteral::Property::CONSTANT:
-        prop_kind = "PROPERTY - CONSTANT";
-        break;
-      case ObjectLiteral::Property::COMPUTED:
-        prop_kind = "PROPERTY - COMPUTED";
-        break;
-      case ObjectLiteral::Property::MATERIALIZED_LITERAL:
-        prop_kind = "PROPERTY - MATERIALIZED_LITERAL";
-        break;
-      case ObjectLiteral::Property::PROTOTYPE:
-        prop_kind = "PROPERTY - PROTOTYPE";
-        break;
-      case ObjectLiteral::Property::GETTER:
-        prop_kind = "PROPERTY - GETTER";
-        break;
-      case ObjectLiteral::Property::SETTER:
-        prop_kind = "PROPERTY - SETTER";
-        break;
-      default:
-        UNREACHABLE();
-    }
-    IndentedScope prop(this, prop_kind);
-    PrintIndentedVisit("KEY", node->properties()->at(i)->key());
-    PrintIndentedVisit("VALUE", node->properties()->at(i)->value());
-  }
+  EmbeddedVector<char, 128> buf;
+  SNPrintF(buf, "literal_index = %d\n", node->literal_index());
+  PrintIndented(buf.start());
+  PrintProperties(node->properties());
 }
 
 
 void AstPrinter::VisitArrayLiteral(ArrayLiteral* node) {
   IndentedScope indent(this, "ARRAY LITERAL");
+
+  EmbeddedVector<char, 128> buf;
+  SNPrintF(buf, "literal_index = %d\n", node->literal_index());
+  PrintIndented(buf.start());
   if (node->values()->length() > 0) {
     IndentedScope indent(this, "VALUES");
     for (int i = 0; i < node->values()->length(); i++) {
@@ -1468,24 +1467,28 @@ void AstPrinter::VisitArrayLiteral(ArrayLiteral* node) {
 }
 
 
-// TODO(svenpanne) Start with IndentedScope.
 void AstPrinter::VisitVariableProxy(VariableProxy* node) {
   Variable* var = node->var();
   EmbeddedVector<char, 128> buf;
-  int pos = SNPrintF(buf, "VAR PROXY");
+  int pos =
+      FormatICSlotNode(&buf, node, "VAR PROXY", node->VariableFeedbackSlot());
+
   switch (var->location()) {
-    case Variable::UNALLOCATED:
+    case VariableLocation::UNALLOCATED:
       break;
-    case Variable::PARAMETER:
+    case VariableLocation::PARAMETER:
       SNPrintF(buf + pos, " parameter[%d]", var->index());
       break;
-    case Variable::LOCAL:
+    case VariableLocation::LOCAL:
       SNPrintF(buf + pos, " local[%d]", var->index());
       break;
-    case Variable::CONTEXT:
+    case VariableLocation::CONTEXT:
       SNPrintF(buf + pos, " context[%d]", var->index());
       break;
-    case Variable::LOOKUP:
+    case VariableLocation::GLOBAL:
+      SNPrintF(buf + pos, " global[%d]", var->index());
+      break;
+    case VariableLocation::LOOKUP:
       SNPrintF(buf + pos, " lookup");
       break;
   }
@@ -1513,7 +1516,10 @@ void AstPrinter::VisitThrow(Throw* node) {
 
 
 void AstPrinter::VisitProperty(Property* node) {
-  IndentedScope indent(this, "PROPERTY");
+  EmbeddedVector<char, 128> buf;
+  FormatICSlotNode(&buf, node, "PROPERTY", node->PropertyFeedbackSlot());
+  IndentedScope indent(this, buf.start());
+
   Visit(node->obj());
   Literal* literal = node->key()->AsLiteral();
   if (literal != NULL && literal->value()->IsInternalizedString()) {
@@ -1525,7 +1531,10 @@ void AstPrinter::VisitProperty(Property* node) {
 
 
 void AstPrinter::VisitCall(Call* node) {
-  IndentedScope indent(this, "CALL");
+  EmbeddedVector<char, 128> buf;
+  FormatICSlotNode(&buf, node, "CALL", node->CallFeedbackICSlot());
+  IndentedScope indent(this, buf.start());
+
   Visit(node->expression());
   PrintArguments(node->arguments());
 }
@@ -1539,8 +1548,9 @@ void AstPrinter::VisitCallNew(CallNew* node) {
 
 
 void AstPrinter::VisitCallRuntime(CallRuntime* node) {
-  IndentedScope indent(this, "CALL RUNTIME");
-  PrintLiteralIndented("NAME", node->name(), false);
+  EmbeddedVector<char, 128> buf;
+  SNPrintF(buf, "CALL RUNTIME %s", node->debug_name());
+  IndentedScope indent(this, buf.start());
   PrintArguments(node->arguments());
 }
 
@@ -1574,15 +1584,33 @@ void AstPrinter::VisitCompareOperation(CompareOperation* node) {
 }
 
 
+void AstPrinter::VisitSpread(Spread* node) {
+  IndentedScope indent(this, "...");
+  Visit(node->expression());
+}
+
+
+void AstPrinter::VisitEmptyParentheses(EmptyParentheses* node) {
+  IndentedScope indent(this, "()");
+}
+
+
 void AstPrinter::VisitThisFunction(ThisFunction* node) {
   IndentedScope indent(this, "THIS-FUNCTION");
 }
 
 
-void AstPrinter::VisitSuperReference(SuperReference* node) {
-  IndentedScope indent(this, "SUPER-REFERENCE");
+void AstPrinter::VisitSuperPropertyReference(SuperPropertyReference* node) {
+  IndentedScope indent(this, "SUPER-PROPERTY-REFERENCE");
 }
+
+
+void AstPrinter::VisitSuperCallReference(SuperCallReference* node) {
+  IndentedScope indent(this, "SUPER-CALL-REFERENCE");
+}
+
 
 #endif  // DEBUG
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "src/hydrogen-dce.h"
-#include "src/v8.h"
 
 namespace v8 {
 namespace internal {
@@ -102,4 +101,5 @@ void HDeadCodeEliminationPhase::RemoveDeadInstructions() {
   }
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

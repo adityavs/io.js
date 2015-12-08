@@ -6,8 +6,6 @@ var join = require('path').join;
 
 var filename = join(common.tmpDir, 'append.txt');
 
-common.error('appending to ' + filename);
-
 var currentFileData = 'ABCD';
 
 var n = 220;
@@ -28,11 +26,9 @@ fs.appendFile(filename, s, function(e) {
   if (e) throw e;
 
   ncallbacks++;
-  common.error('appended to file');
 
   fs.readFile(filename, function(e, buffer) {
     if (e) throw e;
-    common.error('file read');
     ncallbacks++;
     assert.equal(Buffer.byteLength(s), buffer.length);
   });
@@ -46,11 +42,9 @@ fs.appendFile(filename2, s, function(e) {
   if (e) throw e;
 
   ncallbacks++;
-  common.error('appended to file2');
 
   fs.readFile(filename2, function(e, buffer) {
     if (e) throw e;
-    common.error('file2 read');
     ncallbacks++;
     assert.equal(Buffer.byteLength(s) + currentFileData.length, buffer.length);
   });
@@ -61,17 +55,14 @@ var filename3 = join(common.tmpDir, 'append3.txt');
 fs.writeFileSync(filename3, currentFileData);
 
 var buf = new Buffer(s, 'utf8');
-common.error('appending to ' + filename3);
 
 fs.appendFile(filename3, buf, function(e) {
   if (e) throw e;
 
   ncallbacks++;
-  common.error('appended to file3');
 
   fs.readFile(filename3, function(e, buffer) {
     if (e) throw e;
-    common.error('file3 read');
     ncallbacks++;
     assert.equal(buf.length + currentFileData.length, buffer.length);
   });
@@ -81,36 +72,62 @@ fs.appendFile(filename3, buf, function(e) {
 var filename4 = join(common.tmpDir, 'append4.txt');
 fs.writeFileSync(filename4, currentFileData);
 
-common.error('appending to ' + filename4);
-
 var m = 0o600;
 fs.appendFile(filename4, n, { mode: m }, function(e) {
   if (e) throw e;
 
   ncallbacks++;
-  common.error('appended to file4');
 
   // windows permissions aren't unix
-  if (process.platform !== 'win32') {
+  if (!common.isWindows) {
     var st = fs.statSync(filename4);
     assert.equal(st.mode & 0o700, m);
   }
 
   fs.readFile(filename4, function(e, buffer) {
     if (e) throw e;
-    common.error('file4 read');
     ncallbacks++;
     assert.equal(Buffer.byteLength('' + n) + currentFileData.length,
                  buffer.length);
   });
 });
 
+// test that appendFile accepts file descriptors
+var filename5 = join(common.tmpDir, 'append5.txt');
+fs.writeFileSync(filename5, currentFileData);
+
+fs.open(filename5, 'a+', function(e, fd) {
+  if (e) throw e;
+
+  ncallbacks++;
+
+  fs.appendFile(fd, s, function(e) {
+    if (e) throw e;
+
+    ncallbacks++;
+
+    fs.close(fd, function(e) {
+      if (e) throw e;
+
+      ncallbacks++;
+
+      fs.readFile(filename5, function(e, buffer) {
+        if (e) throw e;
+
+        ncallbacks++;
+        assert.equal(Buffer.byteLength(s) + currentFileData.length,
+                     buffer.length);
+      });
+    });
+  });
+});
+
 process.on('exit', function() {
-  common.error('done');
-  assert.equal(8, ncallbacks);
+  assert.equal(12, ncallbacks);
 
   fs.unlinkSync(filename);
   fs.unlinkSync(filename2);
   fs.unlinkSync(filename3);
   fs.unlinkSync(filename4);
+  fs.unlinkSync(filename5);
 });

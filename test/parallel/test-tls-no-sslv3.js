@@ -18,7 +18,7 @@ if (common.opensslCli === false) {
 
 var cert = fs.readFileSync(common.fixturesDir + '/test_cert.pem');
 var key = fs.readFileSync(common.fixturesDir + '/test_key.pem');
-var server = tls.createServer({ cert: cert, key: key }, assert.fail);
+var server = tls.createServer({ cert: cert, key: key }, common.fail);
 
 server.listen(common.PORT, '127.0.0.1', function() {
   var address = this.address().address + ':' + this.address().port;
@@ -29,6 +29,11 @@ server.listen(common.PORT, '127.0.0.1', function() {
               '-no_tls1_1',
               '-no_tls1_2',
               '-connect', address];
+
+  // for the performance and stability issue in s_client on Windows
+  if (common.isWindows)
+    args.push('-no_rand_screen');
+
   var client = spawn(common.opensslCli, args, { stdio: 'inherit' });
   client.once('exit', common.mustCall(function(exitCode) {
     assert.equal(exitCode, 1);

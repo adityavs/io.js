@@ -10,9 +10,9 @@
 
 namespace node {
 
+using v8::External;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
-using v8::Handle;
 using v8::HandleScope;
 using v8::Local;
 using v8::Object;
@@ -23,7 +23,7 @@ using v8::Value;
 
 template <class Base>
 void StreamBase::AddMethods(Environment* env,
-                            Handle<FunctionTemplate> t,
+                            Local<FunctionTemplate> t,
                             int flags) {
   HandleScope scope(env->isolate());
 
@@ -31,6 +31,13 @@ void StreamBase::AddMethods(Environment* env,
       static_cast<PropertyAttribute>(v8::ReadOnly | v8::DontDelete);
   t->InstanceTemplate()->SetAccessor(env->fd_string(),
                                      GetFD<Base>,
+                                     nullptr,
+                                     env->as_external(),
+                                     v8::DEFAULT,
+                                     attributes);
+
+  t->InstanceTemplate()->SetAccessor(env->external_stream_string(),
+                                     GetExternal<Base>,
                                      nullptr,
                                      env->as_external(),
                                      v8::DEFAULT,
@@ -69,6 +76,16 @@ void StreamBase::GetFD(Local<String> key,
     return args.GetReturnValue().Set(UV_EINVAL);
 
   args.GetReturnValue().Set(wrap->GetFD());
+}
+
+
+template <class Base>
+void StreamBase::GetExternal(Local<String> key,
+                             const PropertyCallbackInfo<Value>& args) {
+  StreamBase* wrap = Unwrap<Base>(args.Holder());
+
+  Local<External> ext = External::New(args.GetIsolate(), wrap);
+  args.GetReturnValue().Set(ext);
 }
 
 

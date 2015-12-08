@@ -15,14 +15,13 @@ using v8::Context;
 using v8::External;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
-using v8::Handle;
 using v8::HandleScope;
 using v8::Local;
 using v8::Object;
 using v8::Value;
 
 
-JSStream::JSStream(Environment* env, Handle<Object> obj, AsyncWrap* parent)
+JSStream::JSStream(Environment* env, Local<Object> obj, AsyncWrap* parent)
     : StreamBase(env),
       AsyncWrap(env, obj, AsyncWrap::PROVIDER_JSSTREAM, parent) {
   node::Wrap(obj, this);
@@ -45,7 +44,10 @@ AsyncWrap* JSStream::GetAsyncWrap() {
 
 
 bool JSStream::IsAlive() {
-  return MakeCallback(env()->isalive_string(), 0, nullptr)->IsTrue();
+  v8::Local<v8::Value> fn = object()->Get(env()->isalive_string());
+  if (!fn->IsFunction())
+    return false;
+  return MakeCallback(fn.As<v8::Function>(), 0, nullptr)->IsTrue();
 }
 
 
@@ -88,8 +90,11 @@ int JSStream::DoWrite(WriteWrap* w,
   HandleScope scope(env()->isolate());
 
   Local<Array> bufs_arr = Array::New(env()->isolate(), count);
-  for (size_t i = 0; i < count; i++)
-    bufs_arr->Set(i, Buffer::New(env(), bufs[i].base, bufs[i].len));
+  Local<Object> buf;
+  for (size_t i = 0; i < count; i++) {
+    buf = Buffer::Copy(env(), bufs[i].base, bufs[i].len).ToLocalChecked();
+    bufs_arr->Set(i, buf);
+  }
 
   Local<Value> argv[] = {
     w->object(),
@@ -134,11 +139,13 @@ void JSStream::DoAlloc(const FunctionCallbackInfo<Value>& args) {
 
   uv_buf_t buf;
   wrap->OnAlloc(args[0]->Int32Value(), &buf);
-  args.GetReturnValue().Set(Buffer::New(wrap->env(),
-                                        buf.base,
-                                        buf.len,
-                                        FreeCallback,
-                                        nullptr));
+  Local<Object> vbuf = Buffer::New(
+      wrap->env(),
+      buf.base,
+      buf.len,
+      FreeCallback,
+      nullptr).ToLocalChecked();
+  return args.GetReturnValue().Set(vbuf);
 }
 
 
@@ -196,9 +203,9 @@ void JSStream::EmitEOF(const FunctionCallbackInfo<Value>& args) {
 }
 
 
-void JSStream::Initialize(Handle<Object> target,
-                          Handle<Value> unused,
-                          Handle<Context> context) {
+void JSStream::Initialize(Local<Object> target,
+                          Local<Value> unused,
+                          Local<Context> context) {
   Environment* env = Environment::GetCurrent(context);
 
   Local<FunctionTemplate> t = env->NewFunctionTemplate(New);

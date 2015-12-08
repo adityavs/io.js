@@ -2,12 +2,10 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
-
 #include "src/rewriter.h"
 
 #include "src/ast.h"
-#include "src/compiler.h"
+#include "src/parser.h"
 #include "src/scopes.h"
 
 namespace v8 {
@@ -58,7 +56,7 @@ class Processor: public AstVisitor {
   }
 
   // Node visitors.
-#define DEF_VISIT(type) virtual void Visit##type(type* node) OVERRIDE;
+#define DEF_VISIT(type) virtual void Visit##type(type* node) override;
   AST_NODE_LIST(DEF_VISIT)
 #undef DEF_VISIT
 
@@ -84,14 +82,7 @@ void Processor::VisitBlock(Block* node) {
   // with some JS VMs: For instance, using smjs, print(eval('var x = 7'))
   // returns 'undefined'. To obtain the same behavior with v8, we need
   // to prevent rewriting in that case.
-  if (!node->is_initializer_block()) Process(node->statements());
-}
-
-
-void Processor::VisitModuleStatement(ModuleStatement* node) {
-  bool set_after_body = is_set_;
-  Visit(node->body());
-  is_set_ = is_set_ && set_after_body;
+  if (!node->ignore_completion_value()) Process(node->statements());
 }
 
 
@@ -199,15 +190,17 @@ void Processor::VisitWithStatement(WithStatement* node) {
 }
 
 
+void Processor::VisitSloppyBlockFunctionStatement(
+    SloppyBlockFunctionStatement* node) {
+  Visit(node->statement());
+}
+
+
 // Do nothing:
 void Processor::VisitVariableDeclaration(VariableDeclaration* node) {}
 void Processor::VisitFunctionDeclaration(FunctionDeclaration* node) {}
-void Processor::VisitModuleDeclaration(ModuleDeclaration* node) {}
 void Processor::VisitImportDeclaration(ImportDeclaration* node) {}
 void Processor::VisitExportDeclaration(ExportDeclaration* node) {}
-void Processor::VisitModuleLiteral(ModuleLiteral* node) {}
-void Processor::VisitModulePath(ModulePath* node) {}
-void Processor::VisitModuleUrl(ModuleUrl* node) {}
 void Processor::VisitEmptyStatement(EmptyStatement* node) {}
 void Processor::VisitReturnStatement(ReturnStatement* node) {}
 void Processor::VisitDebuggerStatement(DebuggerStatement* node) {}
@@ -222,8 +215,8 @@ EXPRESSION_NODE_LIST(DEF_VISIT)
 
 // Assumes code has been parsed.  Mutates the AST, so the AST should not
 // continue to be used in the case of failure.
-bool Rewriter::Rewrite(CompilationInfo* info) {
-  FunctionLiteral* function = info->function();
+bool Rewriter::Rewrite(ParseInfo* info) {
+  FunctionLiteral* function = info->literal();
   DCHECK(function != NULL);
   Scope* scope = function->scope();
   DCHECK(scope != NULL);
@@ -260,4 +253,5 @@ bool Rewriter::Rewrite(CompilationInfo* info) {
 }
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

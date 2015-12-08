@@ -61,6 +61,9 @@
     # Similar to the ARM hard float ABI but on MIPS.
     'v8_use_mips_abi_hardfloat%': 'true',
 
+    # Force disable libstdc++ debug mode.
+    'disable_glibcxx_debug%': 0,
+
     'v8_enable_backtrace%': 0,
 
     # Enable profiling support. Only required on Windows.
@@ -128,14 +131,6 @@
 
     # Link-Time Optimizations
     'use_lto%': 0,
-
-    'variables': {
-      # This is set when building the Android WebView inside the Android build
-      # system, using the 'android' gyp backend.
-      'android_webview_build%': 0,
-    },
-    # Copy it out one scope.
-    'android_webview_build%': '<(android_webview_build)',
   },
   'conditions': [
     ['host_arch=="ia32" or host_arch=="x64" or \
@@ -200,7 +195,7 @@
         'target_conditions': [
           ['_toolset=="host"', {
             'conditions': [
-              ['v8_target_arch==host_arch and android_webview_build==0', {
+              ['v8_target_arch==host_arch', {
                 # Host built with an Arm CXX compiler.
                 'conditions': [
                   [ 'arm_version==7', {
@@ -243,7 +238,7 @@
           }],  # _toolset=="host"
           ['_toolset=="target"', {
             'conditions': [
-              ['v8_target_arch==target_arch and android_webview_build==0', {
+              ['v8_target_arch==target_arch', {
                 # Target built with an Arm CXX compiler.
                 'conditions': [
                   [ 'arm_version==7', {
@@ -282,10 +277,12 @@
                   }],
                 ],
               }],
-              # Disable LTO for v8
-              # v8 is optimized for speed, which takes precedence over
-              # size optimization in LTO.
-              ['use_lto==1', {
+              # Disable GCC LTO for v8
+              # v8 is optimized for speed. Because GCC LTO merges flags at link
+              # time, we disable LTO to prevent any -O2 flags from taking
+              # precedence over v8's -Os flag. However, LLVM LTO does not work
+              # this way so we keep LTO enabled under LLVM.
+              ['clang==0 and use_lto==1', {
                 'cflags!': [
                   '-flto',
                   '-ffat-lto-objects',
@@ -343,6 +340,27 @@
         ],
         'cflags': ['-march=i586'],
       }],  # v8_target_arch=="x87"
+      ['(v8_target_arch=="mips" or v8_target_arch=="mipsel" \
+        or v8_target_arch=="mips64" or v8_target_arch=="mips64el") \
+         and v8_target_arch==target_arch', {
+        'target_conditions': [
+          ['_toolset=="target"', {
+            # Target built with a Mips CXX compiler.
+            'variables': {
+              'ldso_path%': '<!(/bin/echo -n $LDSO_PATH)',
+              'ld_r_path%': '<!(/bin/echo -n $LD_R_PATH)',
+            },
+            'conditions': [
+              ['ldso_path!=""', {
+                'ldflags': ['-Wl,--dynamic-linker=<(ldso_path)'],
+              }],
+              ['ld_r_path!=""', {
+                'ldflags': ['-Wl,--rpath=<(ld_r_path)'],
+              }],
+            ],
+          }],
+        ],
+      }],
       ['v8_target_arch=="mips"', {
         'defines': [
           'V8_TARGET_ARCH_MIPS',
@@ -367,7 +385,7 @@
         'target_conditions': [
           ['_toolset=="target"', {
             'conditions': [
-              ['v8_target_arch==target_arch and android_webview_build==0', {
+              ['v8_target_arch==target_arch', {
                 # Target built with a Mips CXX compiler.
                 'cflags': [
                   '-EB',
@@ -389,11 +407,7 @@
                     ],
                     'cflags!': ['-mfp32', '-mfpxx'],
                     'cflags': ['-mips32r6', '-Wa,-mips32r6'],
-                    'ldflags': [
-                      '-mips32r6',
-                      '-Wl,--dynamic-linker=$(LDSO_PATH)',
-                      '-Wl,--rpath=$(LD_R_PATH)',
-                    ],
+                    'ldflags': ['-mips32r6'],
                   }],
                   ['mips_arch_variant=="r2"', {
                     'conditions': [
@@ -554,7 +568,7 @@
         'target_conditions': [
           ['_toolset=="target"', {
             'conditions': [
-              ['v8_target_arch==target_arch and android_webview_build==0', {
+              ['v8_target_arch==target_arch', {
                 # Target built with a Mips CXX compiler.
                 'cflags': [
                   '-EL',
@@ -576,11 +590,7 @@
                     ],
                     'cflags!': ['-mfp32', '-mfpxx'],
                     'cflags': ['-mips32r6', '-Wa,-mips32r6'],
-                    'ldflags': [
-                      '-mips32r6',
-                      '-Wl,--dynamic-linker=$(LDSO_PATH)',
-                      '-Wl,--rpath=$(LD_R_PATH)',
-                    ],
+                    'ldflags': ['-mips32r6'],
                   }],
                   ['mips_arch_variant=="r2"', {
                     'conditions': [
@@ -734,7 +744,7 @@
           }],
         ],
       }],  # v8_target_arch=="mipsel"
-      ['v8_target_arch=="mips64el"', {
+      ['v8_target_arch=="mips64el" or v8_target_arch=="mips64"', {
         'defines': [
           'V8_TARGET_ARCH_MIPS64',
         ],
@@ -742,6 +752,16 @@
           [ 'v8_can_use_fpu_instructions=="true"', {
             'defines': [
               'CAN_USE_FPU_INSTRUCTIONS',
+            ],
+          }],
+          [ 'v8_host_byteorder=="little"', {
+            'defines': [
+              'V8_TARGET_ARCH_MIPS64_LE',
+            ],
+          }],
+          [ 'v8_host_byteorder=="big"', {
+            'defines': [
+              'V8_TARGET_ARCH_MIPS64_BE',
             ],
           }],
           [ 'v8_use_mips_abi_hardfloat=="true"', {
@@ -758,13 +778,19 @@
         'target_conditions': [
           ['_toolset=="target"', {
             'conditions': [
-              ['v8_target_arch==target_arch and android_webview_build==0', {
+              ['v8_target_arch==target_arch', {
                 'cflags': [
-                  '-EL',
                   '-Wno-error=array-bounds',  # Workaround https://gcc.gnu.org/bugzilla/show_bug.cgi?id=56273
                 ],
-                'ldflags': ['-EL'],
                 'conditions': [
+                  ['v8_target_arch=="mips64el"', {
+                    'cflags': ['-EL'],
+                    'ldflags': ['-EL'],
+                  }],
+                  ['v8_target_arch=="mips64"', {
+                    'cflags': ['-EB'],
+                    'ldflags': ['-EB'],
+                  }],
                   [ 'v8_use_mips_abi_hardfloat=="true"', {
                     'cflags': ['-mhard-float'],
                     'ldflags': ['-mhard-float'],
@@ -775,20 +801,12 @@
                   ['mips_arch_variant=="r6"', {
                     'defines': ['_MIPS_ARCH_MIPS64R6',],
                     'cflags': ['-mips64r6', '-mabi=64', '-Wa,-mips64r6'],
-                    'ldflags': [
-                      '-mips64r6', '-mabi=64',
-                      '-Wl,--dynamic-linker=$(LDSO_PATH)',
-                      '-Wl,--rpath=$(LD_R_PATH)',
-                    ],
+                    'ldflags': ['-mips64r6', '-mabi=64'],
                   }],
                   ['mips_arch_variant=="r2"', {
                     'defines': ['_MIPS_ARCH_MIPS64R2',],
                     'cflags': ['-mips64r2', '-mabi=64', '-Wa,-mips64r2'],
-                    'ldflags': [
-                      '-mips64r2', '-mabi=64',
-                      '-Wl,--dynamic-linker=$(LDSO_PATH)',
-                      '-Wl,--rpath=$(LD_R_PATH)',
-                    ],
+                    'ldflags': ['-mips64r2', '-mabi=64'],
                   }],
                 ],
               }, {
@@ -926,12 +944,6 @@
                 'cflags': [ '-m32' ],
                 'ldflags': [ '-m32' ],
               }],
-              # Enable feedback-directed optimisation when building in android.
-              [ 'android_webview_build == 1', {
-                'aosp_build_settings': {
-                  'LOCAL_FDO_SUPPORT': 'true',
-                },
-              }],
             ],
             'xcode_settings': {
               'ARCHS': [ 'i386' ],
@@ -956,12 +968,6 @@
                ['target_cxx_is_biarch==1', {
                  'cflags': [ '-m64' ],
                  'ldflags': [ '-m64' ],
-               }],
-               # Enable feedback-directed optimisation when building in android.
-               [ 'android_webview_build == 1', {
-                 'aosp_build_settings': {
-                   'LOCAL_FDO_SUPPORT': 'true',
-                 },
                }],
              ]
            }],
@@ -1134,8 +1140,18 @@
             # Support for backtrace_symbols.
             'ldflags': [ '-rdynamic' ],
           }],
+          ['OS=="linux" and disable_glibcxx_debug==0', {
+            # Enable libstdc++ debugging facilities to help catch problems
+            # early, see http://crbug.com/65151 .
+            'defines': ['_GLIBCXX_DEBUG=1',],
+          }],
           ['OS=="aix"', {
             'ldflags': [ '-Wl,-bbigtoc' ],
+            'conditions': [
+              ['v8_target_arch=="ppc64"', {
+                'cflags': [ '-maix64 -mcmodel=large' ],
+              }],
+            ],
           }],
           ['OS=="android"', {
             'variables': {
@@ -1152,7 +1168,9 @@
               }],
             ],
           }],
-          ['linux_use_gold_flags==1', {
+          # TODO(pcc): Re-enable in LTO builds once we've fixed the intermittent
+          # link failures (crbug.com/513074).
+          ['linux_use_gold_flags==1 and use_lto==0', {
             'target_conditions': [
               ['_toolset=="target"', {
                 'ldflags': [

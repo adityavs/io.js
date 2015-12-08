@@ -14,6 +14,7 @@ namespace internal {
 class CallOptimization;
 
 enum PrototypeCheckType { CHECK_ALL_MAPS, SKIP_RECEIVER };
+enum ReturnHolder { RETURN_HOLDER, DONT_RETURN_ANYTHING };
 
 class PropertyHandlerCompiler : public PropertyAccessCompiler {
  public:
@@ -30,7 +31,7 @@ class PropertyHandlerCompiler : public PropertyAccessCompiler {
   virtual ~PropertyHandlerCompiler() {}
 
   virtual Register FrontendHeader(Register object_reg, Handle<Name> name,
-                                  Label* miss) {
+                                  Label* miss, ReturnHolder return_what) {
     UNREACHABLE();
     return receiver();
   }
@@ -95,7 +96,7 @@ class PropertyHandlerCompiler : public PropertyAccessCompiler {
   Register CheckPrototypes(Register object_reg, Register holder_reg,
                            Register scratch1, Register scratch2,
                            Handle<Name> name, Label* miss,
-                           PrototypeCheckType check = CHECK_ALL_MAPS);
+                           PrototypeCheckType check, ReturnHolder return_what);
 
   Handle<Code> GetCode(Code::Kind kind, Code::StubType type, Handle<Name> name);
   void set_holder(Handle<JSObject> holder) { holder_ = holder; }
@@ -172,7 +173,7 @@ class NamedLoadHandlerCompiler : public PropertyHandlerCompiler {
 
  protected:
   virtual Register FrontendHeader(Register object_reg, Handle<Name> name,
-                                  Label* miss);
+                                  Label* miss, ReturnHolder return_what);
 
   virtual void FrontendFooter(Handle<Name> name, Label* miss);
 
@@ -246,20 +247,22 @@ class NamedStoreHandlerCompiler : public PropertyHandlerCompiler {
 
  protected:
   virtual Register FrontendHeader(Register object_reg, Handle<Name> name,
-                                  Label* miss);
+                                  Label* miss, ReturnHolder return_what);
 
   virtual void FrontendFooter(Handle<Name> name, Label* miss);
   void GenerateRestoreName(Label* label, Handle<Name> name);
+  void GeneratePushMap(Register map_reg, Register scratch);
 
  private:
   void GenerateRestoreName(Handle<Name> name);
-  void GenerateRestoreMap(Handle<Map> transition, Register scratch,
-                          Label* miss);
+  void GenerateRestoreMap(Handle<Map> transition, Register map_reg,
+                          Register scratch, Label* miss);
 
   void GenerateConstantCheck(Register map_reg, int descriptor,
                              Register value_reg, Register scratch,
                              Label* miss_label);
 
+  bool RequiresFieldTypeChecks(HeapType* field_type) const;
   void GenerateFieldTypeChecks(HeapType* field_type, Register value_reg,
                                Label* miss_label);
 
@@ -289,7 +292,8 @@ class ElementHandlerCompiler : public PropertyHandlerCompiler {
   virtual ~ElementHandlerCompiler() {}
 
   void CompileElementHandlers(MapHandleList* receiver_maps,
-                              CodeHandleList* handlers);
+                              CodeHandleList* handlers,
+                              LanguageMode language_mode);
 
   static void GenerateStoreSlow(MacroAssembler* masm);
 };

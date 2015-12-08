@@ -259,9 +259,15 @@ const int kSaBits        = 5;
 const int kFunctionShift = 0;
 const int kFunctionBits  = 6;
 const int kLuiShift      = 16;
+const int kBp2Shift = 6;
+const int kBp2Bits = 2;
 
 const int kImm16Shift = 0;
 const int kImm16Bits  = 16;
+const int kImm18Shift = 0;
+const int kImm18Bits = 18;
+const int kImm19Shift = 0;
+const int kImm19Bits = 19;
 const int kImm21Shift = 0;
 const int kImm21Bits  = 21;
 const int kImm26Shift = 0;
@@ -294,6 +300,9 @@ const int kFBtrueBits    = 1;
 // Instruction bit masks.
 const int  kOpcodeMask   = ((1 << kOpcodeBits) - 1) << kOpcodeShift;
 const int  kImm16Mask    = ((1 << kImm16Bits) - 1) << kImm16Shift;
+const int kImm18Mask = ((1 << kImm18Bits) - 1) << kImm18Shift;
+const int kImm19Mask = ((1 << kImm19Bits) - 1) << kImm19Shift;
+const int kImm21Mask = ((1 << kImm21Bits) - 1) << kImm21Shift;
 const int  kImm26Mask    = ((1 << kImm26Bits) - 1) << kImm26Shift;
 const int  kImm28Mask    = ((1 << kImm28Bits) - 1) << kImm28Shift;
 const int  kRsFieldMask  = ((1 << kRsBits) - 1) << kRsShift;
@@ -311,252 +320,296 @@ const int  kJumpAddrMask = (1 << (kImm26Bits + kImmFieldShift)) - 1;
 // We use this presentation to stay close to the table representation in
 // MIPS32 Architecture For Programmers, Volume II: The MIPS32 Instruction Set.
 enum Opcode {
-  SPECIAL   =   0 << kOpcodeShift,
-  REGIMM    =   1 << kOpcodeShift,
+  SPECIAL = 0 << kOpcodeShift,
+  REGIMM = 1 << kOpcodeShift,
 
-  J         =   ((0 << 3) + 2) << kOpcodeShift,
-  JAL       =   ((0 << 3) + 3) << kOpcodeShift,
-  BEQ       =   ((0 << 3) + 4) << kOpcodeShift,
-  BNE       =   ((0 << 3) + 5) << kOpcodeShift,
-  BLEZ      =   ((0 << 3) + 6) << kOpcodeShift,
-  BGTZ      =   ((0 << 3) + 7) << kOpcodeShift,
+  J = ((0 << 3) + 2) << kOpcodeShift,
+  JAL = ((0 << 3) + 3) << kOpcodeShift,
+  BEQ = ((0 << 3) + 4) << kOpcodeShift,
+  BNE = ((0 << 3) + 5) << kOpcodeShift,
+  BLEZ = ((0 << 3) + 6) << kOpcodeShift,
+  BGTZ = ((0 << 3) + 7) << kOpcodeShift,
 
-  ADDI      =   ((1 << 3) + 0) << kOpcodeShift,
-  ADDIU     =   ((1 << 3) + 1) << kOpcodeShift,
-  SLTI      =   ((1 << 3) + 2) << kOpcodeShift,
-  SLTIU     =   ((1 << 3) + 3) << kOpcodeShift,
-  ANDI      =   ((1 << 3) + 4) << kOpcodeShift,
-  ORI       =   ((1 << 3) + 5) << kOpcodeShift,
-  XORI      =   ((1 << 3) + 6) << kOpcodeShift,
-  LUI       =   ((1 << 3) + 7) << kOpcodeShift,  // LUI/AUI family.
+  ADDI = ((1 << 3) + 0) << kOpcodeShift,
+  ADDIU = ((1 << 3) + 1) << kOpcodeShift,
+  SLTI = ((1 << 3) + 2) << kOpcodeShift,
+  SLTIU = ((1 << 3) + 3) << kOpcodeShift,
+  ANDI = ((1 << 3) + 4) << kOpcodeShift,
+  ORI = ((1 << 3) + 5) << kOpcodeShift,
+  XORI = ((1 << 3) + 6) << kOpcodeShift,
+  LUI = ((1 << 3) + 7) << kOpcodeShift,  // LUI/AUI family.
 
-  BEQC      =   ((2 << 3) + 0) << kOpcodeShift,
-  COP1      =   ((2 << 3) + 1) << kOpcodeShift,  // Coprocessor 1 class.
-  BEQL      =   ((2 << 3) + 4) << kOpcodeShift,
-  BNEL      =   ((2 << 3) + 5) << kOpcodeShift,
-  BLEZL     =   ((2 << 3) + 6) << kOpcodeShift,
-  BGTZL     =   ((2 << 3) + 7) << kOpcodeShift,
+  BEQC = ((2 << 3) + 0) << kOpcodeShift,
+  COP1 = ((2 << 3) + 1) << kOpcodeShift,  // Coprocessor 1 class.
+  BEQL = ((2 << 3) + 4) << kOpcodeShift,
+  BNEL = ((2 << 3) + 5) << kOpcodeShift,
+  BLEZL = ((2 << 3) + 6) << kOpcodeShift,
+  BGTZL = ((2 << 3) + 7) << kOpcodeShift,
 
-  DADDI     =   ((3 << 3) + 0) << kOpcodeShift,  // This is also BNEC.
-  SPECIAL2  =   ((3 << 3) + 4) << kOpcodeShift,
-  SPECIAL3  =   ((3 << 3) + 7) << kOpcodeShift,
+  DADDI = ((3 << 3) + 0) << kOpcodeShift,  // This is also BNEC.
+  SPECIAL2 = ((3 << 3) + 4) << kOpcodeShift,
+  SPECIAL3 = ((3 << 3) + 7) << kOpcodeShift,
 
-  LB        =   ((4 << 3) + 0) << kOpcodeShift,
-  LH        =   ((4 << 3) + 1) << kOpcodeShift,
-  LWL       =   ((4 << 3) + 2) << kOpcodeShift,
-  LW        =   ((4 << 3) + 3) << kOpcodeShift,
-  LBU       =   ((4 << 3) + 4) << kOpcodeShift,
-  LHU       =   ((4 << 3) + 5) << kOpcodeShift,
-  LWR       =   ((4 << 3) + 6) << kOpcodeShift,
-  SB        =   ((5 << 3) + 0) << kOpcodeShift,
-  SH        =   ((5 << 3) + 1) << kOpcodeShift,
-  SWL       =   ((5 << 3) + 2) << kOpcodeShift,
-  SW        =   ((5 << 3) + 3) << kOpcodeShift,
-  SWR       =   ((5 << 3) + 6) << kOpcodeShift,
+  LB = ((4 << 3) + 0) << kOpcodeShift,
+  LH = ((4 << 3) + 1) << kOpcodeShift,
+  LWL = ((4 << 3) + 2) << kOpcodeShift,
+  LW = ((4 << 3) + 3) << kOpcodeShift,
+  LBU = ((4 << 3) + 4) << kOpcodeShift,
+  LHU = ((4 << 3) + 5) << kOpcodeShift,
+  LWR = ((4 << 3) + 6) << kOpcodeShift,
+  SB = ((5 << 3) + 0) << kOpcodeShift,
+  SH = ((5 << 3) + 1) << kOpcodeShift,
+  SWL = ((5 << 3) + 2) << kOpcodeShift,
+  SW = ((5 << 3) + 3) << kOpcodeShift,
+  SWR = ((5 << 3) + 6) << kOpcodeShift,
 
-  LWC1      =   ((6 << 3) + 1) << kOpcodeShift,
-  LDC1      =   ((6 << 3) + 5) << kOpcodeShift,
-  BEQZC     =   ((6 << 3) + 6) << kOpcodeShift,
+  LWC1 = ((6 << 3) + 1) << kOpcodeShift,
+  BC = ((6 << 3) + 2) << kOpcodeShift,
+  LDC1 = ((6 << 3) + 5) << kOpcodeShift,
+  POP66 = ((6 << 3) + 6) << kOpcodeShift,
 
-  PREF      =   ((6 << 3) + 3) << kOpcodeShift,
+  PREF = ((6 << 3) + 3) << kOpcodeShift,
 
-  SWC1      =   ((7 << 3) + 1) << kOpcodeShift,
-  SDC1      =   ((7 << 3) + 5) << kOpcodeShift,
-  BNEZC     =   ((7 << 3) + 6) << kOpcodeShift,
+  SWC1 = ((7 << 3) + 1) << kOpcodeShift,
+  BALC = ((7 << 3) + 2) << kOpcodeShift,
+  PCREL = ((7 << 3) + 3) << kOpcodeShift,
+  SDC1 = ((7 << 3) + 5) << kOpcodeShift,
+  POP76 = ((7 << 3) + 6) << kOpcodeShift,
 
-  COP1X     =   ((1 << 4) + 3) << kOpcodeShift
+  COP1X = ((1 << 4) + 3) << kOpcodeShift
 };
 
 enum SecondaryField {
   // SPECIAL Encoding of Function Field.
-  SLL       =   ((0 << 3) + 0),
-  MOVCI     =   ((0 << 3) + 1),
-  SRL       =   ((0 << 3) + 2),
-  SRA       =   ((0 << 3) + 3),
-  SLLV      =   ((0 << 3) + 4),
-  SRLV      =   ((0 << 3) + 6),
-  SRAV      =   ((0 << 3) + 7),
+  SLL = ((0 << 3) + 0),
+  MOVCI = ((0 << 3) + 1),
+  SRL = ((0 << 3) + 2),
+  SRA = ((0 << 3) + 3),
+  SLLV = ((0 << 3) + 4),
+  SRLV = ((0 << 3) + 6),
+  SRAV = ((0 << 3) + 7),
 
-  JR        =   ((1 << 3) + 0),
-  JALR      =   ((1 << 3) + 1),
-  MOVZ      =   ((1 << 3) + 2),
-  MOVN      =   ((1 << 3) + 3),
-  BREAK     =   ((1 << 3) + 5),
+  JR = ((1 << 3) + 0),
+  JALR = ((1 << 3) + 1),
+  MOVZ = ((1 << 3) + 2),
+  MOVN = ((1 << 3) + 3),
+  BREAK = ((1 << 3) + 5),
 
-  MFHI      =   ((2 << 3) + 0),
-  CLZ_R6    =   ((2 << 3) + 0),
-  CLO_R6    =   ((2 << 3) + 1),
-  MFLO      =   ((2 << 3) + 2),
+  MFHI = ((2 << 3) + 0),
+  CLZ_R6 = ((2 << 3) + 0),
+  CLO_R6 = ((2 << 3) + 1),
+  MFLO = ((2 << 3) + 2),
 
-  MULT      =   ((3 << 3) + 0),
-  MULTU     =   ((3 << 3) + 1),
-  DIV       =   ((3 << 3) + 2),
-  DIVU      =   ((3 << 3) + 3),
+  MULT = ((3 << 3) + 0),
+  MULTU = ((3 << 3) + 1),
+  DIV = ((3 << 3) + 2),
+  DIVU = ((3 << 3) + 3),
 
-  ADD       =   ((4 << 3) + 0),
-  ADDU      =   ((4 << 3) + 1),
-  SUB       =   ((4 << 3) + 2),
-  SUBU      =   ((4 << 3) + 3),
-  AND       =   ((4 << 3) + 4),
-  OR        =   ((4 << 3) + 5),
-  XOR       =   ((4 << 3) + 6),
-  NOR       =   ((4 << 3) + 7),
+  ADD = ((4 << 3) + 0),
+  ADDU = ((4 << 3) + 1),
+  SUB = ((4 << 3) + 2),
+  SUBU = ((4 << 3) + 3),
+  AND = ((4 << 3) + 4),
+  OR = ((4 << 3) + 5),
+  XOR = ((4 << 3) + 6),
+  NOR = ((4 << 3) + 7),
 
-  SLT       =   ((5 << 3) + 2),
-  SLTU      =   ((5 << 3) + 3),
+  SLT = ((5 << 3) + 2),
+  SLTU = ((5 << 3) + 3),
 
-  TGE       =   ((6 << 3) + 0),
-  TGEU      =   ((6 << 3) + 1),
-  TLT       =   ((6 << 3) + 2),
-  TLTU      =   ((6 << 3) + 3),
-  TEQ       =   ((6 << 3) + 4),
-  SELEQZ_S  =   ((6 << 3) + 5),
-  TNE       =   ((6 << 3) + 6),
-  SELNEZ_S  =   ((6 << 3) + 7),
+  TGE = ((6 << 3) + 0),
+  TGEU = ((6 << 3) + 1),
+  TLT = ((6 << 3) + 2),
+  TLTU = ((6 << 3) + 3),
+  TEQ = ((6 << 3) + 4),
+  SELEQZ_S = ((6 << 3) + 5),
+  TNE = ((6 << 3) + 6),
+  SELNEZ_S = ((6 << 3) + 7),
 
   // Multiply integers in r6.
-  MUL_MUH   =   ((3 << 3) + 0),  // MUL, MUH.
-  MUL_MUH_U =   ((3 << 3) + 1),  // MUL_U, MUH_U.
+  MUL_MUH = ((3 << 3) + 0),    // MUL, MUH.
+  MUL_MUH_U = ((3 << 3) + 1),  // MUL_U, MUH_U.
+  RINT = ((3 << 3) + 2),
 
-  MUL_OP    =   ((0 << 3) + 2),
-  MUH_OP    =   ((0 << 3) + 3),
-  DIV_OP    =   ((0 << 3) + 2),
-  MOD_OP    =   ((0 << 3) + 3),
+  MUL_OP = ((0 << 3) + 2),
+  MUH_OP = ((0 << 3) + 3),
+  DIV_OP = ((0 << 3) + 2),
+  MOD_OP = ((0 << 3) + 3),
 
-  DIV_MOD   =   ((3 << 3) + 2),
-  DIV_MOD_U =   ((3 << 3) + 3),
+  DIV_MOD = ((3 << 3) + 2),
+  DIV_MOD_U = ((3 << 3) + 3),
 
   // SPECIAL2 Encoding of Function Field.
-  MUL       =   ((0 << 3) + 2),
-  CLZ       =   ((4 << 3) + 0),
-  CLO       =   ((4 << 3) + 1),
+  MUL = ((0 << 3) + 2),
+  CLZ = ((4 << 3) + 0),
+  CLO = ((4 << 3) + 1),
 
   // SPECIAL3 Encoding of Function Field.
-  EXT       =   ((0 << 3) + 0),
-  INS       =   ((0 << 3) + 4),
+  EXT = ((0 << 3) + 0),
+  INS = ((0 << 3) + 4),
+  BSHFL = ((4 << 3) + 0),
+
+  // SPECIAL3 Encoding of sa Field.
+  BITSWAP = ((0 << 3) + 0),
+  ALIGN = ((0 << 3) + 2),
+  WSBH = ((0 << 3) + 2),
+  SEB = ((2 << 3) + 0),
+  SEH = ((3 << 3) + 0),
 
   // REGIMM  encoding of rt Field.
-  BLTZ      =   ((0 << 3) + 0) << 16,
-  BGEZ      =   ((0 << 3) + 1) << 16,
-  BLTZAL    =   ((2 << 3) + 0) << 16,
-  BGEZAL    =   ((2 << 3) + 1) << 16,
-  BGEZALL   =   ((2 << 3) + 3) << 16,
+  BLTZ = ((0 << 3) + 0) << 16,
+  BGEZ = ((0 << 3) + 1) << 16,
+  BLTZAL = ((2 << 3) + 0) << 16,
+  BGEZAL = ((2 << 3) + 1) << 16,
+  BGEZALL = ((2 << 3) + 3) << 16,
 
   // COP1 Encoding of rs Field.
-  MFC1      =   ((0 << 3) + 0) << 21,
-  CFC1      =   ((0 << 3) + 2) << 21,
-  MFHC1     =   ((0 << 3) + 3) << 21,
-  MTC1      =   ((0 << 3) + 4) << 21,
-  CTC1      =   ((0 << 3) + 6) << 21,
-  MTHC1     =   ((0 << 3) + 7) << 21,
-  BC1       =   ((1 << 3) + 0) << 21,
-  S         =   ((2 << 3) + 0) << 21,
-  D         =   ((2 << 3) + 1) << 21,
-  W         =   ((2 << 3) + 4) << 21,
-  L         =   ((2 << 3) + 5) << 21,
-  PS        =   ((2 << 3) + 6) << 21,
+  MFC1 = ((0 << 3) + 0) << 21,
+  CFC1 = ((0 << 3) + 2) << 21,
+  MFHC1 = ((0 << 3) + 3) << 21,
+  MTC1 = ((0 << 3) + 4) << 21,
+  CTC1 = ((0 << 3) + 6) << 21,
+  MTHC1 = ((0 << 3) + 7) << 21,
+  BC1 = ((1 << 3) + 0) << 21,
+  S = ((2 << 3) + 0) << 21,
+  D = ((2 << 3) + 1) << 21,
+  W = ((2 << 3) + 4) << 21,
+  L = ((2 << 3) + 5) << 21,
+  PS = ((2 << 3) + 6) << 21,
   // COP1 Encoding of Function Field When rs=S.
-  ROUND_L_S =   ((1 << 3) + 0),
-  TRUNC_L_S =   ((1 << 3) + 1),
-  CEIL_L_S  =   ((1 << 3) + 2),
-  FLOOR_L_S =   ((1 << 3) + 3),
-  ROUND_W_S =   ((1 << 3) + 4),
-  TRUNC_W_S =   ((1 << 3) + 5),
-  CEIL_W_S  =   ((1 << 3) + 6),
-  FLOOR_W_S =   ((1 << 3) + 7),
-  CVT_D_S   =   ((4 << 3) + 1),
-  CVT_W_S   =   ((4 << 3) + 4),
-  CVT_L_S   =   ((4 << 3) + 5),
-  CVT_PS_S  =   ((4 << 3) + 6),
-  // COP1 Encoding of Function Field When rs=D.
-  ADD_D     =   ((0 << 3) + 0),
-  SUB_D     =   ((0 << 3) + 1),
-  MUL_D     =   ((0 << 3) + 2),
-  DIV_D     =   ((0 << 3) + 3),
-  SQRT_D    =   ((0 << 3) + 4),
-  ABS_D     =   ((0 << 3) + 5),
-  MOV_D     =   ((0 << 3) + 6),
-  NEG_D     =   ((0 << 3) + 7),
-  ROUND_L_D =   ((1 << 3) + 0),
-  TRUNC_L_D =   ((1 << 3) + 1),
-  CEIL_L_D  =   ((1 << 3) + 2),
-  FLOOR_L_D =   ((1 << 3) + 3),
-  ROUND_W_D =   ((1 << 3) + 4),
-  TRUNC_W_D =   ((1 << 3) + 5),
-  CEIL_W_D  =   ((1 << 3) + 6),
-  FLOOR_W_D =   ((1 << 3) + 7),
-  MIN       =   ((3 << 3) + 4),
-  MINA      =   ((3 << 3) + 5),
-  MAX       =   ((3 << 3) + 6),
-  MAXA      =   ((3 << 3) + 7),
-  CVT_S_D   =   ((4 << 3) + 0),
-  CVT_W_D   =   ((4 << 3) + 4),
-  CVT_L_D   =   ((4 << 3) + 5),
-  C_F_D     =   ((6 << 3) + 0),
-  C_UN_D    =   ((6 << 3) + 1),
-  C_EQ_D    =   ((6 << 3) + 2),
-  C_UEQ_D   =   ((6 << 3) + 3),
-  C_OLT_D   =   ((6 << 3) + 4),
-  C_ULT_D   =   ((6 << 3) + 5),
-  C_OLE_D   =   ((6 << 3) + 6),
-  C_ULE_D   =   ((6 << 3) + 7),
-  // COP1 Encoding of Function Field When rs=W or L.
-  CVT_S_W   =   ((4 << 3) + 0),
-  CVT_D_W   =   ((4 << 3) + 1),
-  CVT_S_L   =   ((4 << 3) + 0),
-  CVT_D_L   =   ((4 << 3) + 1),
-  BC1EQZ    =   ((2 << 2) + 1) << 21,
-  BC1NEZ    =   ((3 << 2) + 1) << 21,
-  // COP1 CMP positive predicates Bit 5..4 = 00.
-  CMP_AF    =   ((0 << 3) + 0),
-  CMP_UN    =   ((0 << 3) + 1),
-  CMP_EQ    =   ((0 << 3) + 2),
-  CMP_UEQ   =   ((0 << 3) + 3),
-  CMP_LT    =   ((0 << 3) + 4),
-  CMP_ULT   =   ((0 << 3) + 5),
-  CMP_LE    =   ((0 << 3) + 6),
-  CMP_ULE   =   ((0 << 3) + 7),
-  CMP_SAF   =   ((1 << 3) + 0),
-  CMP_SUN   =   ((1 << 3) + 1),
-  CMP_SEQ   =   ((1 << 3) + 2),
-  CMP_SUEQ  =   ((1 << 3) + 3),
-  CMP_SSLT  =   ((1 << 3) + 4),
-  CMP_SSULT =   ((1 << 3) + 5),
-  CMP_SLE   =   ((1 << 3) + 6),
-  CMP_SULE  =   ((1 << 3) + 7),
-  // COP1 CMP negative predicates Bit 5..4 = 01.
-  CMP_AT    =   ((2 << 3) + 0),  // Reserved, not implemented.
-  CMP_OR    =   ((2 << 3) + 1),
-  CMP_UNE   =   ((2 << 3) + 2),
-  CMP_NE    =   ((2 << 3) + 3),
-  CMP_UGE   =   ((2 << 3) + 4),  // Reserved, not implemented.
-  CMP_OGE   =   ((2 << 3) + 5),  // Reserved, not implemented.
-  CMP_UGT   =   ((2 << 3) + 6),  // Reserved, not implemented.
-  CMP_OGT   =   ((2 << 3) + 7),  // Reserved, not implemented.
-  CMP_SAT   =   ((3 << 3) + 0),  // Reserved, not implemented.
-  CMP_SOR   =   ((3 << 3) + 1),
-  CMP_SUNE  =   ((3 << 3) + 2),
-  CMP_SNE   =   ((3 << 3) + 3),
-  CMP_SUGE  =   ((3 << 3) + 4),  // Reserved, not implemented.
-  CMP_SOGE  =   ((3 << 3) + 5),  // Reserved, not implemented.
-  CMP_SUGT  =   ((3 << 3) + 6),  // Reserved, not implemented.
-  CMP_SOGT  =   ((3 << 3) + 7),  // Reserved, not implemented.
 
-  SEL       =   ((2 << 3) + 0),
-  SELEQZ_C  =   ((2 << 3) + 4),  // COP1 on FPR registers.
-  SELNEZ_C  =   ((2 << 3) + 7),  // COP1 on FPR registers.
+  ADD_S = ((0 << 3) + 0),
+  SUB_S = ((0 << 3) + 1),
+  MUL_S = ((0 << 3) + 2),
+  DIV_S = ((0 << 3) + 3),
+  ABS_S = ((0 << 3) + 5),
+  SQRT_S = ((0 << 3) + 4),
+  MOV_S = ((0 << 3) + 6),
+  NEG_S = ((0 << 3) + 7),
+  ROUND_L_S = ((1 << 3) + 0),
+  TRUNC_L_S = ((1 << 3) + 1),
+  CEIL_L_S = ((1 << 3) + 2),
+  FLOOR_L_S = ((1 << 3) + 3),
+  ROUND_W_S = ((1 << 3) + 4),
+  TRUNC_W_S = ((1 << 3) + 5),
+  CEIL_W_S = ((1 << 3) + 6),
+  FLOOR_W_S = ((1 << 3) + 7),
+  RECIP_S = ((2 << 3) + 5),
+  RSQRT_S = ((2 << 3) + 6),
+  CLASS_S = ((3 << 3) + 3),
+  CVT_D_S = ((4 << 3) + 1),
+  CVT_W_S = ((4 << 3) + 4),
+  CVT_L_S = ((4 << 3) + 5),
+  CVT_PS_S = ((4 << 3) + 6),
+
+  // COP1 Encoding of Function Field When rs=D.
+  ADD_D = ((0 << 3) + 0),
+  SUB_D = ((0 << 3) + 1),
+  MUL_D = ((0 << 3) + 2),
+  DIV_D = ((0 << 3) + 3),
+  SQRT_D = ((0 << 3) + 4),
+  ABS_D = ((0 << 3) + 5),
+  MOV_D = ((0 << 3) + 6),
+  NEG_D = ((0 << 3) + 7),
+  ROUND_L_D = ((1 << 3) + 0),
+  TRUNC_L_D = ((1 << 3) + 1),
+  CEIL_L_D = ((1 << 3) + 2),
+  FLOOR_L_D = ((1 << 3) + 3),
+  ROUND_W_D = ((1 << 3) + 4),
+  TRUNC_W_D = ((1 << 3) + 5),
+  CEIL_W_D = ((1 << 3) + 6),
+  FLOOR_W_D = ((1 << 3) + 7),
+  RECIP_D = ((2 << 3) + 5),
+  RSQRT_D = ((2 << 3) + 6),
+  CLASS_D = ((3 << 3) + 3),
+  MIN = ((3 << 3) + 4),
+  MINA = ((3 << 3) + 5),
+  MAX = ((3 << 3) + 6),
+  MAXA = ((3 << 3) + 7),
+  CVT_S_D = ((4 << 3) + 0),
+  CVT_W_D = ((4 << 3) + 4),
+  CVT_L_D = ((4 << 3) + 5),
+  C_F_D = ((6 << 3) + 0),
+  C_UN_D = ((6 << 3) + 1),
+  C_EQ_D = ((6 << 3) + 2),
+  C_UEQ_D = ((6 << 3) + 3),
+  C_OLT_D = ((6 << 3) + 4),
+  C_ULT_D = ((6 << 3) + 5),
+  C_OLE_D = ((6 << 3) + 6),
+  C_ULE_D = ((6 << 3) + 7),
+
+  // COP1 Encoding of Function Field When rs=W or L.
+  CVT_S_W = ((4 << 3) + 0),
+  CVT_D_W = ((4 << 3) + 1),
+  CVT_S_L = ((4 << 3) + 0),
+  CVT_D_L = ((4 << 3) + 1),
+  BC1EQZ = ((2 << 2) + 1) << 21,
+  BC1NEZ = ((3 << 2) + 1) << 21,
+  // COP1 CMP positive predicates Bit 5..4 = 00.
+  CMP_AF = ((0 << 3) + 0),
+  CMP_UN = ((0 << 3) + 1),
+  CMP_EQ = ((0 << 3) + 2),
+  CMP_UEQ = ((0 << 3) + 3),
+  CMP_LT = ((0 << 3) + 4),
+  CMP_ULT = ((0 << 3) + 5),
+  CMP_LE = ((0 << 3) + 6),
+  CMP_ULE = ((0 << 3) + 7),
+  CMP_SAF = ((1 << 3) + 0),
+  CMP_SUN = ((1 << 3) + 1),
+  CMP_SEQ = ((1 << 3) + 2),
+  CMP_SUEQ = ((1 << 3) + 3),
+  CMP_SSLT = ((1 << 3) + 4),
+  CMP_SSULT = ((1 << 3) + 5),
+  CMP_SLE = ((1 << 3) + 6),
+  CMP_SULE = ((1 << 3) + 7),
+  // COP1 CMP negative predicates Bit 5..4 = 01.
+  CMP_AT = ((2 << 3) + 0),  // Reserved, not implemented.
+  CMP_OR = ((2 << 3) + 1),
+  CMP_UNE = ((2 << 3) + 2),
+  CMP_NE = ((2 << 3) + 3),
+  CMP_UGE = ((2 << 3) + 4),  // Reserved, not implemented.
+  CMP_OGE = ((2 << 3) + 5),  // Reserved, not implemented.
+  CMP_UGT = ((2 << 3) + 6),  // Reserved, not implemented.
+  CMP_OGT = ((2 << 3) + 7),  // Reserved, not implemented.
+  CMP_SAT = ((3 << 3) + 0),  // Reserved, not implemented.
+  CMP_SOR = ((3 << 3) + 1),
+  CMP_SUNE = ((3 << 3) + 2),
+  CMP_SNE = ((3 << 3) + 3),
+  CMP_SUGE = ((3 << 3) + 4),  // Reserved, not implemented.
+  CMP_SOGE = ((3 << 3) + 5),  // Reserved, not implemented.
+  CMP_SUGT = ((3 << 3) + 6),  // Reserved, not implemented.
+  CMP_SOGT = ((3 << 3) + 7),  // Reserved, not implemented.
+
+  SEL = ((2 << 3) + 0),
+  MOVZ_C = ((2 << 3) + 2),
+  MOVN_C = ((2 << 3) + 3),
+  SELEQZ_C = ((2 << 3) + 4),  // COP1 on FPR registers.
+  MOVF = ((2 << 3) + 1),      // Function field for MOVT.fmt and MOVF.fmt
+  SELNEZ_C = ((2 << 3) + 7),  // COP1 on FPR registers.
   // COP1 Encoding of Function Field When rs=PS.
   // COP1X Encoding of Function Field.
-  MADD_D    =   ((4 << 3) + 1),
+  MADD_D = ((4 << 3) + 1),
 
-  NULLSF    =   0
+  // PCREL Encoding of rt Field.
+  ADDIUPC = ((0 << 2) + 0),
+  LWPC = ((0 << 2) + 1),
+  AUIPC = ((3 << 3) + 6),
+  ALUIPC = ((3 << 3) + 7),
+
+  // POP66 Encoding of rs Field.
+  JIC = ((0 << 5) + 0),
+
+  // POP76 Encoding of rs Field.
+  JIALC = ((0 << 5) + 0),
+
+  NULLSF = 0
 };
 
 
 // ----- Emulated conditions.
-// On MIPS we use this enum to abstract from conditionnal branch instructions.
+// On MIPS we use this enum to abstract from conditional branch instructions.
 // The 'U' prefix is used to specify unsigned comparisons.
-// Oppposite conditions must be paired as odd/even numbers
+// Opposite conditions must be paired as odd/even numbers
 // because 'NegateCondition' function flips LSB to negate condition.
 enum Condition {
   // Any value < 0 is considered no_condition.
@@ -565,10 +618,10 @@ enum Condition {
   no_overflow = 1,
   Uless = 2,
   Ugreater_equal = 3,
-  equal = 4,
-  not_equal = 5,
-  Uless_equal = 6,
-  Ugreater = 7,
+  Uless_equal = 4,
+  Ugreater = 5,
+  equal = 6,
+  not_equal = 7,  // Unordered or Not Equal.
   negative = 8,
   positive = 9,
   parity_even = 10,
@@ -578,7 +631,7 @@ enum Condition {
   less_equal = 14,
   greater = 15,
   ueq = 16,  // Unordered or Equal.
-  nue = 17,  // Not (Unordered or Equal).
+  ogl = 17,  // Ordered and Not Equal.
   cc_always = 18,
 
   // Aliases.
@@ -602,6 +655,10 @@ enum Condition {
   hs = Ugreater_equal,
   lo = Uless,
   al = cc_always,
+  ult = Uless,
+  uge = Ugreater_equal,
+  ule = Uless_equal,
+  ugt = Ugreater,
   cc_default = kNoCondition
 };
 
@@ -613,6 +670,39 @@ enum Condition {
 inline Condition NegateCondition(Condition cc) {
   DCHECK(cc != cc_always);
   return static_cast<Condition>(cc ^ 1);
+}
+
+
+inline Condition NegateFpuCondition(Condition cc) {
+  DCHECK(cc != cc_always);
+  switch (cc) {
+    case ult:
+      return ge;
+    case ugt:
+      return le;
+    case uge:
+      return lt;
+    case ule:
+      return gt;
+    case lt:
+      return uge;
+    case gt:
+      return ule;
+    case ge:
+      return ult;
+    case le:
+      return ugt;
+    case eq:
+      return ne;
+    case ne:
+      return eq;
+    case ueq:
+      return ogl;
+    case ogl:
+      return ueq;
+    default:
+      return cc;
+  }
 }
 
 
@@ -645,14 +735,21 @@ inline Condition CommuteCondition(Condition cc) {
 enum FPUCondition {
   kNoFPUCondition = -1,
 
-  F     = 0,  // False.
-  UN    = 1,  // Unordered.
-  EQ    = 2,  // Equal.
-  UEQ   = 3,  // Unordered or Equal.
-  OLT   = 4,  // Ordered or Less Than.
-  ULT   = 5,  // Unordered or Less Than.
-  OLE   = 6,  // Ordered or Less Than or Equal.
-  ULE   = 7   // Unordered or Less Than or Equal.
+  F = 0x00,    // False.
+  UN = 0x01,   // Unordered.
+  EQ = 0x02,   // Equal.
+  UEQ = 0x03,  // Unordered or Equal.
+  OLT = 0x04,  // Ordered or Less Than, on Mips release < 6.
+  LT = 0x04,   // Ordered or Less Than, on Mips release >= 6.
+  ULT = 0x05,  // Unordered or Less Than.
+  OLE = 0x06,  // Ordered or Less Than or Equal, on Mips release < 6.
+  LE = 0x06,   // Ordered or Less Than or Equal, on Mips release >= 6.
+  ULE = 0x07,  // Unordered or Less Than or Equal.
+
+  // Following constants are available on Mips release >= 6 only.
+  ORD = 0x11,  // Ordered, on Mips release >= 6.
+  UNE = 0x12,  // Not equal, on Mips release >= 6.
+  NE = 0x13,   // Ordered Greater Than or Less Than. on Mips >= 6 only.
 };
 
 
@@ -723,6 +820,7 @@ const Instr rtCallRedirInstr = SPECIAL | BREAK | call_rt_redirected << 6;
 // A nop instruction. (Encoding of sll 0 0 0).
 const Instr nopInstr = 0;
 
+
 class Instruction {
  public:
   enum {
@@ -761,9 +859,57 @@ class Instruction {
     kUnsupported = -1
   };
 
-  // Get the encoding type of the instruction.
-  Type InstructionType() const;
+  enum TypeChecks { NORMAL, EXTRA };
 
+
+#define OpcodeToBitNumber(opcode) \
+  (1ULL << (static_cast<uint32_t>(opcode) >> kOpcodeShift))
+
+  static const uint64_t kOpcodeImmediateTypeMask =
+      OpcodeToBitNumber(REGIMM) | OpcodeToBitNumber(BEQ) |
+      OpcodeToBitNumber(BNE) | OpcodeToBitNumber(BLEZ) |
+      OpcodeToBitNumber(BGTZ) | OpcodeToBitNumber(ADDI) |
+      OpcodeToBitNumber(DADDI) | OpcodeToBitNumber(ADDIU) |
+      OpcodeToBitNumber(SLTI) | OpcodeToBitNumber(SLTIU) |
+      OpcodeToBitNumber(ANDI) | OpcodeToBitNumber(ORI) |
+      OpcodeToBitNumber(XORI) | OpcodeToBitNumber(LUI) |
+      OpcodeToBitNumber(BEQL) | OpcodeToBitNumber(BNEL) |
+      OpcodeToBitNumber(BLEZL) | OpcodeToBitNumber(BGTZL) |
+      OpcodeToBitNumber(POP66) | OpcodeToBitNumber(POP76) |
+      OpcodeToBitNumber(LB) | OpcodeToBitNumber(LH) | OpcodeToBitNumber(LWL) |
+      OpcodeToBitNumber(LW) | OpcodeToBitNumber(LBU) | OpcodeToBitNumber(LHU) |
+      OpcodeToBitNumber(LWR) | OpcodeToBitNumber(SB) | OpcodeToBitNumber(SH) |
+      OpcodeToBitNumber(SWL) | OpcodeToBitNumber(SW) | OpcodeToBitNumber(SWR) |
+      OpcodeToBitNumber(LWC1) | OpcodeToBitNumber(LDC1) |
+      OpcodeToBitNumber(SWC1) | OpcodeToBitNumber(SDC1) |
+      OpcodeToBitNumber(PCREL) | OpcodeToBitNumber(BC) |
+      OpcodeToBitNumber(BALC);
+
+#define FunctionFieldToBitNumber(function) (1ULL << function)
+
+  static const uint64_t kFunctionFieldRegisterTypeMask =
+      FunctionFieldToBitNumber(JR) | FunctionFieldToBitNumber(JALR) |
+      FunctionFieldToBitNumber(BREAK) | FunctionFieldToBitNumber(SLL) |
+      FunctionFieldToBitNumber(SRL) | FunctionFieldToBitNumber(SRA) |
+      FunctionFieldToBitNumber(SLLV) | FunctionFieldToBitNumber(SRLV) |
+      FunctionFieldToBitNumber(SRAV) | FunctionFieldToBitNumber(MFHI) |
+      FunctionFieldToBitNumber(MFLO) | FunctionFieldToBitNumber(MULT) |
+      FunctionFieldToBitNumber(MULTU) | FunctionFieldToBitNumber(DIV) |
+      FunctionFieldToBitNumber(DIVU) | FunctionFieldToBitNumber(ADD) |
+      FunctionFieldToBitNumber(ADDU) | FunctionFieldToBitNumber(SUB) |
+      FunctionFieldToBitNumber(SUBU) | FunctionFieldToBitNumber(AND) |
+      FunctionFieldToBitNumber(OR) | FunctionFieldToBitNumber(XOR) |
+      FunctionFieldToBitNumber(NOR) | FunctionFieldToBitNumber(SLT) |
+      FunctionFieldToBitNumber(SLTU) | FunctionFieldToBitNumber(TGE) |
+      FunctionFieldToBitNumber(TGEU) | FunctionFieldToBitNumber(TLT) |
+      FunctionFieldToBitNumber(TLTU) | FunctionFieldToBitNumber(TEQ) |
+      FunctionFieldToBitNumber(TNE) | FunctionFieldToBitNumber(MOVZ) |
+      FunctionFieldToBitNumber(MOVN) | FunctionFieldToBitNumber(MOVCI) |
+      FunctionFieldToBitNumber(SELEQZ_S) | FunctionFieldToBitNumber(SELNEZ_S);
+
+
+  // Get the encoding type of the instruction.
+  inline Type InstructionType(TypeChecks checks = NORMAL) const;
 
   // Accessors for the different named fields used in the MIPS encoding.
   inline Opcode OpcodeValue() const {
@@ -815,6 +961,11 @@ class Instruction {
     return Bits(kFrShift + kFrBits -1, kFrShift);
   }
 
+  inline int Bp2Value() const {
+    DCHECK(InstructionType() == kRegisterType);
+    return Bits(kBp2Shift + kBp2Bits - 1, kBp2Shift);
+  }
+
   // Float Compare condition code instruction bits.
   inline int FCccValue() const {
     return Bits(kFCccShift + kFCccBits - 1, kFCccShift);
@@ -858,7 +1009,6 @@ class Instruction {
   }
 
   inline int SaFieldRaw() const {
-    DCHECK(InstructionType() == kRegisterType);
     return InstructionBits() & kSaFieldMask;
   }
 
@@ -887,13 +1037,24 @@ class Instruction {
     return Bits(kImm16Shift + kImm16Bits - 1, kImm16Shift);
   }
 
+  inline int32_t Imm18Value() const {
+    DCHECK(InstructionType() == kImmediateType);
+    return Bits(kImm18Shift + kImm18Bits - 1, kImm18Shift);
+  }
+
+  inline int32_t Imm19Value() const {
+    DCHECK(InstructionType() == kImmediateType);
+    return Bits(kImm19Shift + kImm19Bits - 1, kImm19Shift);
+  }
+
   inline int32_t Imm21Value() const {
     DCHECK(InstructionType() == kImmediateType);
     return Bits(kImm21Shift + kImm21Bits - 1, kImm21Shift);
   }
 
   inline int32_t Imm26Value() const {
-    DCHECK(InstructionType() == kJumpType);
+    DCHECK((InstructionType() == kJumpType) ||
+           (InstructionType() == kImmediateType));
     return Bits(kImm26Shift + kImm26Bits - 1, kImm26Shift);
   }
 
@@ -932,6 +1093,91 @@ const int kBArgsSlotsSize = 0 * Instruction::kInstrSize;
 
 const int kBranchReturnOffset = 2 * Instruction::kInstrSize;
 
+
+Instruction::Type Instruction::InstructionType(TypeChecks checks) const {
+  if (checks == EXTRA) {
+    if (OpcodeToBitNumber(OpcodeFieldRaw()) & kOpcodeImmediateTypeMask) {
+      return kImmediateType;
+    }
+  }
+  switch (OpcodeFieldRaw()) {
+    case SPECIAL:
+      if (checks == EXTRA) {
+        if (FunctionFieldToBitNumber(FunctionFieldRaw()) &
+            kFunctionFieldRegisterTypeMask) {
+          return kRegisterType;
+        } else {
+          return kUnsupported;
+        }
+      } else {
+        return kRegisterType;
+      }
+      break;
+    case SPECIAL2:
+      switch (FunctionFieldRaw()) {
+        case MUL:
+        case CLZ:
+          return kRegisterType;
+        default:
+          return kUnsupported;
+      }
+      break;
+    case SPECIAL3:
+      switch (FunctionFieldRaw()) {
+        case INS:
+        case EXT:
+          return kRegisterType;
+        case BSHFL: {
+          int sa = SaFieldRaw() >> kSaShift;
+          switch (sa) {
+            case BITSWAP:
+              return kRegisterType;
+            case WSBH:
+            case SEB:
+            case SEH:
+              return kUnsupported;
+          }
+          sa >>= kBp2Bits;
+          switch (sa) {
+            case ALIGN:
+              return kRegisterType;
+            default:
+              return kUnsupported;
+          }
+        }
+        default:
+          return kUnsupported;
+      }
+      break;
+    case COP1:  // Coprocessor instructions.
+      switch (RsFieldRawNoAssert()) {
+        case BC1:  // Branch on coprocessor condition.
+        case BC1EQZ:
+        case BC1NEZ:
+          return kImmediateType;
+        default:
+          return kRegisterType;
+      }
+      break;
+    case COP1X:
+      return kRegisterType;
+
+    // 26 bits immediate type instructions. e.g.: j imm26.
+    case J:
+    case JAL:
+      return kJumpType;
+
+    default:
+      if (checks == NORMAL) {
+        return kImmediateType;
+      } else {
+        return kUnsupported;
+      }
+  }
+}
+
+#undef OpcodeToBitNumber
+#undef FunctionFieldToBitNumber
 } }   // namespace v8::internal
 
 #endif    // #ifndef V8_MIPS_CONSTANTS_H_

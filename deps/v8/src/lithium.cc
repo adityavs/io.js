@@ -4,10 +4,7 @@
 
 #include "src/lithium.h"
 
-#include "src/v8.h"
-
 #include "src/scopes.h"
-#include "src/serialize.h"
 
 #if V8_TARGET_ARCH_IA32
 #include "src/ia32/lithium-ia32.h"  // NOLINT
@@ -273,9 +270,9 @@ LChunk::LChunk(CompilationInfo* info, HGraph* graph)
       graph_(graph),
       instructions_(32, info->zone()),
       pointer_maps_(8, info->zone()),
-      inlined_closures_(1, info->zone()),
-      deprecation_dependencies_(MapLess(), MapAllocator(info->zone())),
-      stability_dependencies_(MapLess(), MapAllocator(info->zone())) {}
+      inlined_functions_(1, info->zone()),
+      deprecation_dependencies_(32, info->zone()),
+      stability_dependencies_(8, info->zone()) {}
 
 
 LLabel* LChunk::GetLabel(int block_id) const {
@@ -448,14 +445,14 @@ void LChunk::RegisterWeakObjectsInOptimizedCode(Handle<Code> code) const {
     }
   }
   for (int i = 0; i < maps.length(); i++) {
+    if (maps.at(i)->dependent_code()->number_of_entries(
+            DependentCode::kWeakCodeGroup) == 0) {
+      isolate()->heap()->AddRetainedMap(maps.at(i));
+    }
     Map::AddDependentCode(maps.at(i), DependentCode::kWeakCodeGroup, code);
   }
   for (int i = 0; i < objects.length(); i++) {
     AddWeakObjectToCodeDependency(isolate(), objects.at(i), code);
-  }
-  if (FLAG_enable_ool_constant_pool) {
-    code->constant_pool()->set_weak_object_state(
-        ConstantPoolArray::WEAK_OBJECTS_IN_OPTIMIZED_CODE);
   }
   code->set_can_have_weak_objects(true);
 }
@@ -465,23 +462,19 @@ void LChunk::CommitDependencies(Handle<Code> code) const {
   if (!code->is_optimized_code()) return;
   HandleScope scope(isolate());
 
-  for (MapSet::const_iterator it = deprecation_dependencies_.begin(),
-       iend = deprecation_dependencies_.end(); it != iend; ++it) {
-    Handle<Map> map = *it;
+  for (Handle<Map> map : deprecation_dependencies_) {
     DCHECK(!map->is_deprecated());
     DCHECK(map->CanBeDeprecated());
     Map::AddDependentCode(map, DependentCode::kTransitionGroup, code);
   }
 
-  for (MapSet::const_iterator it = stability_dependencies_.begin(),
-       iend = stability_dependencies_.end(); it != iend; ++it) {
-    Handle<Map> map = *it;
+  for (Handle<Map> map : stability_dependencies_) {
     DCHECK(map->is_stable());
     DCHECK(map->CanTransition());
     Map::AddDependentCode(map, DependentCode::kPrototypeCheckGroup, code);
   }
 
-  info_->CommitDependencies(code);
+  info_->dependencies()->Commit(code);
   RegisterWeakObjectsInOptimizedCode(code);
 }
 
@@ -527,9 +520,7 @@ Handle<Code> LChunk::Codegen() {
   if (generator.GenerateCode()) {
     generator.CheckEnvironmentUsage();
     CodeGenerator::MakeCodePrologue(info(), "optimized");
-    Code::Flags flags = info()->flags();
-    Handle<Code> code =
-        CodeGenerator::MakeCodeEpilogue(&assembler, flags, info());
+    Handle<Code> code = CodeGenerator::MakeCodeEpilogue(&assembler, info());
     generator.FinishCode(code);
     CommitDependencies(code);
     code->set_is_crankshafted(true);
@@ -723,4 +714,5 @@ LPhase::~LPhase() {
 }
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

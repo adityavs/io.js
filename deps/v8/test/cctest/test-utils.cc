@@ -25,6 +25,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// TODO(mythria): Remove this after it is turned on globally
+#define V8_IMMINENT_DEPRECATION_WARNINGS
+
 #include <stdlib.h>
 
 #include <vector>
@@ -32,7 +35,6 @@
 #include "src/v8.h"
 
 #include "src/base/platform/platform.h"
-#include "src/utils-inl.h"
 #include "test/cctest/cctest.h"
 
 using namespace v8::internal;

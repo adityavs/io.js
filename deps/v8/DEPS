@@ -8,23 +8,25 @@ vars = {
 
 deps = {
   "v8/build/gyp":
-    Var("git_url") + "/external/gyp.git" + "@" + "34640080d08ab2a37665512e52142947def3056d",
+    Var("git_url") + "/external/gyp.git" + "@" + "01528c7244837168a1c80f06ff60fa5a9793c824",
   "v8/third_party/icu":
-    Var("git_url") + "/chromium/deps/icu.git" + "@" + "4e3266f32c62d30a3f9e2232a753c60129d1e670",
+    Var("git_url") + "/chromium/deps/icu.git" + "@" + "423fc7e1107fb08ccf007c4aeb76dcab8b2747c1",
   "v8/buildtools":
-    Var("git_url") + "/chromium/buildtools.git" + "@" + "5c5e924788fe40f7d6e0a3841ac572de2475e689",
+    Var("git_url") + "/chromium/buildtools.git" + "@" + "e7111440c07a883b82ffbbe6d26c744dfc6c9673",
+  "v8/tools/swarming_client":
+    Var('git_url') + '/external/swarming.client.git' + '@' + "6e5d2b21f0ac98396cd736097a985346feed1328",
   "v8/testing/gtest":
-    Var("git_url") + "/external/googletest.git" + "@" + "be1868139ffe0ccd0e8e3b37292b84c821d9c8ad",
+    Var("git_url") + "/external/googletest.git" + "@" + "9855a87157778d39b95eccfb201a9dc90f6d61c6",
   "v8/testing/gmock":
-    Var("git_url") + "/external/googlemock.git" + "@" + "29763965ab52f24565299976b936d1265cb6a271",  # from svn revision 501
+    Var("git_url") + "/external/googlemock.git" + "@" + "0421b6f358139f02e102c9c332ce19a33faf75be",
   "v8/tools/clang":
-    Var("git_url") + "/chromium/src/tools/clang.git" + "@" + "f6daa55d03995e82201a3278203e7c0421a59546",
+    Var("git_url") + "/chromium/src/tools/clang.git" + "@" + "0150e39a3112dbc7e4c7a3ab25276b8d7781f3b6",
 }
 
 deps_os = {
   "android": {
     "v8/third_party/android_tools":
-      Var("git_url") + "/android_tools.git" + "@" + "4f723e2a5fa5b7b8a198072ac19b92344be2b271",
+      Var("git_url") + "/android_tools.git" + "@" + "4238a28593b7e6178c95431f91ca8c24e45fa7eb",
   },
   "win": {
     "v8/third_party/cygwin":
@@ -46,6 +48,17 @@ skip_child_includes = [
 ]
 
 hooks = [
+  {
+    # This clobbers when necessary (based on get_landmines.py). It must be the
+    # first hook so that other things that get/generate into the output
+    # directory will not subsequently be clobbered.
+    'name': 'landmines',
+    'pattern': '.',
+    'action': [
+        'python',
+        'v8/build/landmines.py',
+    ],
+  },
   # Pull clang-format binaries using checked-in hashes.
   {
     "name": "clang_format_win",
@@ -90,6 +103,13 @@ hooks = [
         'python',
         'v8/third_party/binutils/download.py',
     ],
+  },
+  {
+    # Pull gold plugin if needed or requested via GYP_DEFINES.
+    # Note: This must run before the clang update.
+    'name': 'gold_plugin',
+    'pattern': '.',
+    'action': ['python', 'v8/build/download_gold_plugin.py'],
   },
   {
     # Pull clang if needed or requested via GYP_DEFINES.

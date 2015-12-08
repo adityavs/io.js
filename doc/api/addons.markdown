@@ -6,28 +6,25 @@ knowledge of several libraries:
 
  - V8 JavaScript, a C++ library. Used for interfacing with JavaScript:
    creating objects, calling functions, etc.  Documented mostly in the
-   `v8.h` header file (`deps/v8/include/v8.h` in the io.js source
-   tree), which is also available
-   [online](https://v8docs.nodesource.com/).
+   `v8.h` header file (`deps/v8/include/v8.h` in the Node.js source
+   tree), which is also available [online][].
 
- - [libuv](https://github.com/libuv/libuv), C event loop library.
-   Anytime one needs to wait for a file descriptor to become readable,
-   wait for a timer, or wait for a signal to be received one will need
-   to interface with libuv. That is, if you perform any I/O, libuv will
-   need to be used.
+ - [libuv][], C event loop library. Anytime one needs to wait for a file
+   descriptor to become readable, wait for a timer, or wait for a signal
+   to be received one will need to interface with libuv. That is, if you
+   perform any I/O, libuv will need to be used.
 
- - Internal io.js libraries. Most importantly is the `node::ObjectWrap`
+ - Internal Node.js libraries. Most importantly is the `node::ObjectWrap`
    class which you will likely want to derive from.
 
  - Others. Look in `deps/` for what else is available.
 
-io.js statically compiles all its dependencies into the executable.
+Node.js statically compiles all its dependencies into the executable.
 When compiling your module, you don't need to worry about linking to
 any of these libraries.
 
-All of the following examples are available for
-[download](https://github.com/rvagg/node-addon-examples) and may be
-used as a starting-point for your own Addon.
+All of the following examples are available for [download][] and may
+be used as a starting-point for your own Addon.
 
 ## Hello world
 
@@ -44,7 +41,6 @@ First we create a file `hello.cc`:
     namespace demo {
 
     using v8::FunctionCallbackInfo;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Object;
@@ -64,7 +60,7 @@ First we create a file `hello.cc`:
 
     }  // namespace demo
 
-Note that all io.js addons must export an initialization function:
+Note that all Node.js addons must export an initialization function:
 
     void Initialize(Local<Object> exports);
     NODE_MODULE(module_name, Initialize)
@@ -78,7 +74,7 @@ The `module_name` needs to match the filename of the final binary (minus the
 The source code needs to be built into `addon.node`, the binary Addon. To
 do this we create a file called `binding.gyp` which describes the configuration
 to build your module in a JSON-like format. This file gets compiled by
-[node-gyp](https://github.com/TooTallNate/node-gyp).
+[node-gyp][].
 
     {
       "targets": [
@@ -99,7 +95,7 @@ command.
 Now you have your compiled `.node` bindings file! The compiled bindings end up
 in `build/Release/`.
 
-You can now use the binary addon in an io.js project `hello.js` by pointing
+You can now use the binary addon in an Node.js project `hello.js` by pointing
 `require` to the recently built `hello.node` module:
 
     // hello.js
@@ -114,10 +110,9 @@ Please see patterns below for further information or
 ## Addon patterns
 
 Below are some addon patterns to help you get started. Consult the online
-[v8 reference](http://izs.me/v8-docs/main.html) for help with the various v8
-calls, and v8's [Embedder's Guide](http://code.google.com/apis/v8/embed.html)
-for an explanation of several concepts used such as handles, scopes,
-function templates, etc.
+[v8 reference][] for help with the various v8 calls, and v8's
+[Embedder's Guide][] for an explanation of several concepts used such as
+handles, scopes, function templates, etc.
 
 In order to use these examples you need to compile them using `node-gyp`.
 Create the following `binding.gyp` file:
@@ -155,7 +150,6 @@ function calls and return a result. This is the main and only needed source
 
     using v8::Exception;
     using v8::FunctionCallbackInfo;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Number;
@@ -212,7 +206,6 @@ there. Here's `addon.cc`:
 
     using v8::Function;
     using v8::FunctionCallbackInfo;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Null;
@@ -263,7 +256,6 @@ the string passed to `createObject()`:
     namespace demo {
 
     using v8::FunctionCallbackInfo;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Object;
@@ -310,7 +302,6 @@ wraps a C++ function:
     using v8::Function;
     using v8::FunctionCallbackInfo;
     using v8::FunctionTemplate;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Object;
@@ -415,7 +406,6 @@ prototype:
     using v8::Function;
     using v8::FunctionCallbackInfo;
     using v8::FunctionTemplate;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Number;
@@ -505,7 +495,6 @@ Let's register our `createObject` method in `addon.cc`:
     namespace demo {
 
     using v8::FunctionCallbackInfo;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Object;
@@ -568,7 +557,6 @@ The implementation is similar to the above in `myobject.cc`:
     using v8::Function;
     using v8::FunctionCallbackInfo;
     using v8::FunctionTemplate;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Number;
@@ -656,7 +644,7 @@ Test it with:
 ### Passing wrapped objects around
 
 In addition to wrapping and returning C++ objects, you can pass them around
-by unwrapping them with io.js's `node::ObjectWrap::Unwrap` helper function.
+by unwrapping them with Node.js's `node::ObjectWrap::Unwrap` helper function.
 In the following `addon.cc` we introduce a function `add()` that can take on two
 `MyObject` objects:
 
@@ -668,7 +656,6 @@ In the following `addon.cc` we introduce a function `add()` that can take on two
     namespace demo {
 
     using v8::FunctionCallbackInfo;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Number;
@@ -745,7 +732,6 @@ The implementation of `myobject.cc` is similar as before:
     using v8::Function;
     using v8::FunctionCallbackInfo;
     using v8::FunctionTemplate;
-    using v8::HandleScope;
     using v8::Isolate;
     using v8::Local;
     using v8::Object;
@@ -879,3 +865,10 @@ Test in JavaScript by running:
 
     // test.js
     var addon = require('./build/Release/addon');
+
+[online]: https://v8docs.nodesource.com/
+[libuv]: https://github.com/libuv/libuv
+[download]: https://github.com/rvagg/node-addon-examples
+[node-gyp]: https://github.com/nodejs/node-gyp
+[v8 reference]: http://izs.me/v8-docs/main.html
+[Embedder's Guide]: https://code.google.com/apis/v8/embed.html

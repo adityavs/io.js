@@ -36,6 +36,8 @@ static int CheckInputs(Node* node, Node* i0 = NULL, Node* i1 = NULL,
 
 static Operator kIntLt(IrOpcode::kInt32LessThan, Operator::kPure,
                        "Int32LessThan", 2, 0, 0, 1, 0, 0);
+static Operator kIntAdd(IrOpcode::kInt32Add, Operator::kPure, "Int32Add", 2, 0,
+                        0, 1, 0, 0);
 
 
 static const int kMaxOsrValues = 10;
@@ -49,7 +51,7 @@ class OsrDeconstructorTester : public HandleAndZoneScope {
         jsgraph(main_isolate(), &graph, &common, NULL, NULL),
         start(graph.NewNode(common.Start(1))),
         p0(graph.NewNode(common.Parameter(0), start)),
-        end(graph.NewNode(common.End(), start)),
+        end(graph.NewNode(common.End(1), start)),
         osr_normal_entry(graph.NewNode(common.OsrNormalEntry(), start, start)),
         osr_loop_entry(graph.NewNode(common.OsrLoopEntry(), start, start)),
         self(graph.NewNode(common.Int32Constant(0xaabbccdd))) {
@@ -91,22 +93,16 @@ class OsrDeconstructorTester : public HandleAndZoneScope {
     return graph.NewNode(common.Phi(kMachAnyTagged, count), count + 1, inputs);
   }
 
-  Node* NewLoop(bool is_osr, int num_backedges, Node* entry = NULL) {
-    CHECK_LT(num_backedges, 4);
-    CHECK_GE(num_backedges, 0);
-    int count = 1 + num_backedges;
-    if (entry == NULL) entry = osr_normal_entry;
-    Node* inputs[5] = {entry, self, self, self, self};
+  Node* NewLoop(bool is_osr, int num_backedges, Node* entry = nullptr) {
+    if (entry == nullptr) entry = osr_normal_entry;
+    Node* loop = graph.NewNode(common.Loop(1), entry);
     if (is_osr) {
-      count = 2 + num_backedges;
-      inputs[1] = osr_loop_entry;
+      loop->AppendInput(graph.zone(), osr_loop_entry);
     }
-
-    Node* loop = graph.NewNode(common.Loop(count), count, inputs);
-    for (int i = 0; i < loop->InputCount(); i++) {
-      if (loop->InputAt(i) == self) loop->ReplaceInput(i, loop);
+    for (int i = 0; i < num_backedges; i++) {
+      loop->AppendInput(graph.zone(), loop);
     }
-
+    NodeProperties::ChangeOp(loop, common.Loop(loop->InputCount()));
     return loop;
   }
 
@@ -122,7 +118,12 @@ class OsrDeconstructorTester : public HandleAndZoneScope {
     CHECK(!nodes.IsLive(osr_normal_entry));
     CHECK(!nodes.IsLive(osr_loop_entry));
     // No dangling nodes should be left over.
-    CHECK_EQ(0u, nodes.gray.size());
+    for (Node* const node : nodes.live) {
+      for (Node* const use : node->uses()) {
+        CHECK(std::find(nodes.live.begin(), nodes.live.end(), use) !=
+              nodes.live.end());
+      }
+    }
   }
 };
 
@@ -151,30 +152,6 @@ TEST(Deconstruct_osr1) {
   T.graph.SetEnd(ret);
 
   T.DeconstructOsr();
-
-  CheckInputs(loop, T.start, loop);
-  CheckInputs(osr_phi, T.osr_values[0], T.jsgraph.ZeroConstant(), loop);
-  CheckInputs(ret, osr_phi, T.start, loop);
-}
-
-
-TEST(Deconstruct_osr1_type) {
-  OsrDeconstructorTester T(1);
-
-  Node* loop = T.NewOsrLoop(1);
-  Node* osr_phi =
-      T.NewOsrPhi(loop, T.jsgraph.OneConstant(), 0, T.jsgraph.ZeroConstant());
-  Type* type = Type::Signed32();
-  NodeProperties::SetBounds(osr_phi, Bounds(type, type));
-
-  Node* ret = T.graph.NewNode(T.common.Return(), osr_phi, T.start, loop);
-  T.graph.SetEnd(ret);
-
-  OsrHelper helper(0, 0);
-  helper.Deconstruct(&T.jsgraph, &T.common, T.main_zone());
-
-  CHECK_EQ(type, NodeProperties::GetBounds(T.osr_values[0]).lower);
-  CHECK_EQ(type, NodeProperties::GetBounds(T.osr_values[0]).upper);
 
   CheckInputs(loop, T.start, loop);
   CheckInputs(osr_phi, T.osr_values[0], T.jsgraph.ZeroConstant(), loop);
@@ -363,14 +340,14 @@ TEST(Deconstruct_osr_nested1) {
   Node* outer_phi = outer.Phi(T.p0, T.p0, nullptr);
   outer.branch->ReplaceInput(0, outer_phi);
 
-  Node* osr_phi = inner.Phi(T.jsgraph.OneConstant(), T.osr_values[0],
-                            T.jsgraph.ZeroConstant());
+  Node* osr_phi = inner.Phi(T.jsgraph.TrueConstant(), T.osr_values[0],
+                            T.jsgraph.FalseConstant());
   inner.branch->ReplaceInput(0, osr_phi);
   outer_phi->ReplaceInput(1, osr_phi);
 
   Node* ret =
       T.graph.NewNode(T.common.Return(), outer_phi, T.start, outer.exit);
-  Node* end = T.graph.NewNode(T.common.End(), ret);
+  Node* end = T.graph.NewNode(T.common.End(1), ret);
   T.graph.SetEnd(end);
 
   T.DeconstructOsr();
@@ -378,7 +355,7 @@ TEST(Deconstruct_osr_nested1) {
   // Check structure of deconstructed graph.
   // Check inner OSR loop is directly connected to start.
   CheckInputs(inner.loop, T.start, inner.if_true);
-  CheckInputs(osr_phi, T.osr_values[0], T.jsgraph.ZeroConstant(), inner.loop);
+  CheckInputs(osr_phi, T.osr_values[0], T.jsgraph.FalseConstant(), inner.loop);
 
   // Check control transfer to copy of outer loop.
   Node* new_outer_loop = FindSuccessor(inner.exit, IrOpcode::kLoop);
@@ -405,8 +382,8 @@ TEST(Deconstruct_osr_nested1) {
   Node* new_inner_loop = FindSuccessor(new_outer_if_true, IrOpcode::kLoop);
   Node* new_inner_phi = FindSuccessor(new_inner_loop, IrOpcode::kPhi);
 
-  CheckInputs(new_inner_phi, T.jsgraph.OneConstant(), T.jsgraph.ZeroConstant(),
-              new_inner_loop);
+  CheckInputs(new_inner_phi, T.jsgraph.TrueConstant(),
+              T.jsgraph.FalseConstant(), new_inner_loop);
   CheckInputs(new_outer_phi, osr_phi, new_inner_phi, new_outer_loop);
 }
 
@@ -422,11 +399,11 @@ TEST(Deconstruct_osr_nested2) {
   Node* outer_phi = outer.Phi(T.p0, T.p0, T.p0);
   outer.branch->ReplaceInput(0, outer_phi);
 
-  Node* osr_phi = inner.Phi(T.jsgraph.OneConstant(), T.osr_values[0],
-                            T.jsgraph.ZeroConstant());
+  Node* osr_phi = inner.Phi(T.jsgraph.TrueConstant(), T.osr_values[0],
+                            T.jsgraph.FalseConstant());
   inner.branch->ReplaceInput(0, osr_phi);
   outer_phi->ReplaceInput(1, osr_phi);
-  outer_phi->ReplaceInput(2, T.jsgraph.ZeroConstant());
+  outer_phi->ReplaceInput(2, T.jsgraph.FalseConstant());
 
   Node* x_branch = T.graph.NewNode(T.common.Branch(), osr_phi, inner.exit);
   Node* x_true = T.graph.NewNode(T.common.IfTrue(), x_branch);
@@ -437,7 +414,7 @@ TEST(Deconstruct_osr_nested2) {
 
   Node* ret =
       T.graph.NewNode(T.common.Return(), outer_phi, T.start, outer.exit);
-  Node* end = T.graph.NewNode(T.common.End(), ret);
+  Node* end = T.graph.NewNode(T.common.End(1), ret);
   T.graph.SetEnd(end);
 
   T.DeconstructOsr();
@@ -445,7 +422,7 @@ TEST(Deconstruct_osr_nested2) {
   // Check structure of deconstructed graph.
   // Check inner OSR loop is directly connected to start.
   CheckInputs(inner.loop, T.start, inner.if_true);
-  CheckInputs(osr_phi, T.osr_values[0], T.jsgraph.ZeroConstant(), inner.loop);
+  CheckInputs(osr_phi, T.osr_values[0], T.jsgraph.FalseConstant(), inner.loop);
 
   // Check control transfer to copy of outer loop.
   Node* new_merge = FindSuccessor(x_true, IrOpcode::kMerge);
@@ -458,7 +435,7 @@ TEST(Deconstruct_osr_nested2) {
   CHECK_NE(new_outer_phi, outer_phi);
 
   Node* new_entry_phi = FindSuccessor(new_merge, IrOpcode::kPhi);
-  CheckInputs(new_entry_phi, osr_phi, T.jsgraph.ZeroConstant(), new_merge);
+  CheckInputs(new_entry_phi, osr_phi, T.jsgraph.FalseConstant(), new_merge);
 
   CHECK_EQ(new_merge, new_outer_loop->InputAt(0));
 
@@ -479,8 +456,110 @@ TEST(Deconstruct_osr_nested2) {
   Node* new_inner_loop = FindSuccessor(new_outer_if_true, IrOpcode::kLoop);
   Node* new_inner_phi = FindSuccessor(new_inner_loop, IrOpcode::kPhi);
 
-  CheckInputs(new_inner_phi, T.jsgraph.OneConstant(), T.jsgraph.ZeroConstant(),
-              new_inner_loop);
+  CheckInputs(new_inner_phi, T.jsgraph.TrueConstant(),
+              T.jsgraph.FalseConstant(), new_inner_loop);
   CheckInputs(new_outer_phi, new_entry_phi, new_inner_phi,
-              T.jsgraph.ZeroConstant(), new_outer_loop);
+              T.jsgraph.FalseConstant(), new_outer_loop);
+}
+
+
+Node* MakeCounter(JSGraph* jsgraph, Node* start, Node* loop) {
+  int count = loop->InputCount();
+  NodeVector tmp_inputs(jsgraph->graph()->zone());
+  for (int i = 0; i < count; i++) {
+    tmp_inputs.push_back(start);
+  }
+  tmp_inputs.push_back(loop);
+
+  Node* phi = jsgraph->graph()->NewNode(
+      jsgraph->common()->Phi(kMachInt32, count), count + 1, &tmp_inputs[0]);
+  Node* inc = jsgraph->graph()->NewNode(&kIntAdd, phi, jsgraph->OneConstant());
+
+  for (int i = 1; i < count; i++) {
+    phi->ReplaceInput(i, inc);
+  }
+  return phi;
+}
+
+
+TEST(Deconstruct_osr_nested3) {
+  OsrDeconstructorTester T(1);
+
+  // outermost loop.
+  While loop0(T, T.p0, false, 1);
+  Node* loop0_cntr = MakeCounter(&T.jsgraph, T.p0, loop0.loop);
+  loop0.branch->ReplaceInput(0, loop0_cntr);
+
+  // middle loop.
+  Node* loop1 = T.graph.NewNode(T.common.Loop(1), loop0.if_true);
+  Node* loop1_phi = T.graph.NewNode(T.common.Phi(kMachAnyTagged, 2), loop0_cntr,
+                                    loop0_cntr, loop1);
+
+  // innermost (OSR) loop.
+  While loop2(T, T.p0, true, 1);
+  loop2.loop->ReplaceInput(0, loop1);
+
+  Node* loop2_cntr = MakeCounter(&T.jsgraph, loop1_phi, loop2.loop);
+  loop2_cntr->ReplaceInput(1, T.osr_values[0]);
+  Node* osr_phi = loop2_cntr;
+  Node* loop2_inc = loop2_cntr->InputAt(2);
+  loop2.branch->ReplaceInput(0, loop2_cntr);
+
+  loop1_phi->ReplaceInput(1, loop2_cntr);
+  loop0_cntr->ReplaceInput(1, loop2_cntr);
+
+  // Branch to either the outer or middle loop.
+  Node* branch = T.graph.NewNode(T.common.Branch(), loop2_cntr, loop2.exit);
+  Node* if_true = T.graph.NewNode(T.common.IfTrue(), branch);
+  Node* if_false = T.graph.NewNode(T.common.IfFalse(), branch);
+
+  loop0.loop->ReplaceInput(1, if_true);
+  loop1->AppendInput(T.graph.zone(), if_false);
+  NodeProperties::ChangeOp(loop1, T.common.Loop(2));
+
+  Node* ret =
+      T.graph.NewNode(T.common.Return(), loop0_cntr, T.start, loop0.exit);
+  Node* end = T.graph.NewNode(T.common.End(1), ret);
+  T.graph.SetEnd(end);
+
+  T.DeconstructOsr();
+
+  // Check structure of deconstructed graph.
+  // Check loop2 (OSR loop) is directly connected to start.
+  CheckInputs(loop2.loop, T.start, loop2.if_true);
+  CheckInputs(osr_phi, T.osr_values[0], loop2_inc, loop2.loop);
+  CheckInputs(loop2.branch, osr_phi, loop2.loop);
+  CheckInputs(loop2.if_true, loop2.branch);
+  CheckInputs(loop2.exit, loop2.branch);
+  CheckInputs(branch, osr_phi, loop2.exit);
+  CheckInputs(if_true, branch);
+  CheckInputs(if_false, branch);
+
+  // Check structure of new_loop1.
+  Node* new_loop1_loop = FindSuccessor(if_false, IrOpcode::kLoop);
+  // TODO(titzer): check the internal copy of loop2.
+  USE(new_loop1_loop);
+
+  // Check structure of new_loop0.
+  Node* new_loop0_loop_entry = FindSuccessor(if_true, IrOpcode::kMerge);
+  Node* new_loop0_loop = FindSuccessor(new_loop0_loop_entry, IrOpcode::kLoop);
+  // TODO(titzer): check the internal copies of loop1 and loop2.
+
+  Node* new_loop0_branch = FindSuccessor(new_loop0_loop, IrOpcode::kBranch);
+  Node* new_loop0_if_true = FindSuccessor(new_loop0_branch, IrOpcode::kIfTrue);
+  Node* new_loop0_exit = FindSuccessor(new_loop0_branch, IrOpcode::kIfFalse);
+
+  USE(new_loop0_if_true);
+
+  Node* new_ret = T.graph.end()->InputAt(0);
+  CHECK_EQ(IrOpcode::kReturn, new_ret->opcode());
+
+  Node* new_loop0_phi = new_ret->InputAt(0);
+  CHECK_EQ(IrOpcode::kPhi, new_loop0_phi->opcode());
+  CHECK_EQ(new_loop0_loop, NodeProperties::GetControlInput(new_loop0_phi));
+  CHECK_EQ(new_loop0_phi, FindSuccessor(new_loop0_loop, IrOpcode::kPhi));
+
+  // Check that the return returns the phi from the OSR loop and control
+  // depends on the copy of the outer loop0.
+  CheckInputs(new_ret, new_loop0_phi, T.graph.start(), new_loop0_exit);
 }

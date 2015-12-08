@@ -19,7 +19,6 @@ using v8::External;
 using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
-using v8::Handle;
 using v8::HandleScope;
 using v8::Integer;
 using v8::Local;
@@ -45,7 +44,7 @@ class SendWrap : public ReqWrap<uv_udp_send_t> {
 SendWrap::SendWrap(Environment* env,
                    Local<Object> req_wrap_obj,
                    bool have_callback)
-    : ReqWrap(env, req_wrap_obj, AsyncWrap::PROVIDER_UDPWRAP),
+    : ReqWrap(env, req_wrap_obj, AsyncWrap::PROVIDER_UDPSENDWRAP),
       have_callback_(have_callback) {
   Wrap(req_wrap_obj, this);
 }
@@ -61,7 +60,7 @@ static void NewSendWrap(const FunctionCallbackInfo<Value>& args) {
 }
 
 
-UDPWrap::UDPWrap(Environment* env, Handle<Object> object, AsyncWrap* parent)
+UDPWrap::UDPWrap(Environment* env, Local<Object> object, AsyncWrap* parent)
     : HandleWrap(env,
                  object,
                  reinterpret_cast<uv_handle_t*>(&handle_),
@@ -71,9 +70,9 @@ UDPWrap::UDPWrap(Environment* env, Handle<Object> object, AsyncWrap* parent)
 }
 
 
-void UDPWrap::Initialize(Handle<Object> target,
-                         Handle<Value> unused,
-                         Handle<Context> context) {
+void UDPWrap::Initialize(Local<Object> target,
+                         Local<Value> unused,
+                         Local<Context> context) {
   Environment* env = Environment::GetCurrent(context);
 
   Local<FunctionTemplate> t = env->NewFunctionTemplate(New);
@@ -96,7 +95,8 @@ void UDPWrap::Initialize(Handle<Object> target,
   env->SetProtoMethod(t, "close", Close);
   env->SetProtoMethod(t, "recvStart", RecvStart);
   env->SetProtoMethod(t, "recvStop", RecvStop);
-  env->SetProtoMethod(t, "getsockname", GetSockName);
+  env->SetProtoMethod(t, "getsockname",
+                      GetSockOrPeerName<UDPWrap, uv_udp_getsockname>);
   env->SetProtoMethod(t, "addMembership", AddMembership);
   env->SetProtoMethod(t, "dropMembership", DropMembership);
   env->SetProtoMethod(t, "setMulticastTTL", SetMulticastTTL);
@@ -166,7 +166,7 @@ void UDPWrap::DoBind(const FunctionCallbackInfo<Value>& args, int family) {
     break;
   default:
     CHECK(0 && "unexpected address family");
-    abort();
+    ABORT();
   }
 
   if (err == 0) {
@@ -278,7 +278,7 @@ void UDPWrap::DoSend(const FunctionCallbackInfo<Value>& args, int family) {
     break;
   default:
     CHECK(0 && "unexpected address family");
-    abort();
+    ABORT();
   }
 
   if (err == 0) {
@@ -322,29 +322,6 @@ void UDPWrap::RecvStop(const FunctionCallbackInfo<Value>& args) {
   UDPWrap* wrap = Unwrap<UDPWrap>(args.Holder());
   int r = uv_udp_recv_stop(&wrap->handle_);
   args.GetReturnValue().Set(r);
-}
-
-
-void UDPWrap::GetSockName(const FunctionCallbackInfo<Value>& args) {
-  Environment* env = Environment::GetCurrent(args);
-
-  struct sockaddr_storage address;
-  UDPWrap* wrap = Unwrap<UDPWrap>(args.Holder());
-
-  CHECK(args[0]->IsObject());
-  Local<Object> obj = args[0].As<Object>();
-
-  int addrlen = sizeof(address);
-  int err = uv_udp_getsockname(&wrap->handle_,
-                               reinterpret_cast<sockaddr*>(&address),
-                               &addrlen);
-
-  if (err == 0) {
-    const sockaddr* addr = reinterpret_cast<const sockaddr*>(&address);
-    AddressToJS(env, addr, obj);
-  }
-
-  args.GetReturnValue().Set(err);
 }
 
 
@@ -408,7 +385,7 @@ void UDPWrap::OnRecv(uv_udp_t* handle,
   }
 
   char* base = static_cast<char*>(realloc(buf->base, nread));
-  argv[2] = Buffer::Use(env, base, nread);
+  argv[2] = Buffer::New(env, base, nread).ToLocalChecked();
   argv[3] = AddressToJS(env, addr);
   wrap->MakeCallback(env->onmessage_string(), ARRAY_SIZE(argv), argv);
 }

@@ -4,14 +4,14 @@ var assert = require('assert');
 var cluster = require('cluster');
 var net = require('net');
 
-if (process.platform === 'win32') {
+if (common.isWindows) {
   console.log('1..0 # Skipped: not reliable on Windows.');
   return;
 }
 
 if (process.getuid() === 0) {
-  console.log('Do not run this test as root.');
-  process.exit(0);
+  console.log('1..0 # Skipped: Test is not supposed to be run as root.');
+  return;
 }
 
 if (cluster.isMaster) {
@@ -20,8 +20,8 @@ if (cluster.isMaster) {
   }));
 }
 else {
-  var s = net.createServer(assert.fail);
-  s.listen(42, assert.fail.bind(null, 'listen should have failed'));
+  var s = net.createServer(common.fail);
+  s.listen(42, common.fail.bind(null, 'listen should have failed'));
   s.on('error', common.mustCall(function(err) {
     assert.equal(err.code, 'EACCES');
     process.disconnect();

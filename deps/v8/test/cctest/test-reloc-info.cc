@@ -45,7 +45,7 @@ TEST(Positions) {
   const int code_size = 10 * KB;
   int relocation_info_size = 10 * KB;
   const int buffer_size = code_size + relocation_info_size;
-  SmartArrayPointer<byte> buffer(new byte[buffer_size]);
+  v8::base::SmartArrayPointer<byte> buffer(new byte[buffer_size]);
 
   byte* pc = buffer.get();
   byte* buffer_end = buffer.get() + buffer_size;
@@ -66,8 +66,8 @@ TEST(Positions) {
 
   writer.Finish();
   relocation_info_size = static_cast<int>(buffer_end - writer.pos());
-  CodeDesc desc = { buffer.get(), buffer_size, code_size,
-                    relocation_info_size, NULL };
+  CodeDesc desc = {buffer.get(), buffer_size, code_size, relocation_info_size,
+                   0, NULL};
 
   // Read only (non-statement) positions.
   {
@@ -120,4 +120,5 @@ TEST(Positions) {
   }
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

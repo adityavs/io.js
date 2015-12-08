@@ -15,7 +15,7 @@ namespace v8 {
 namespace internal {
 
 // Associates a body of code with an interface descriptor.
-class Callable FINAL BASE_EMBEDDED {
+class Callable final BASE_EMBEDDED {
  public:
   Callable(Handle<Code> code, CallInterfaceDescriptor descriptor)
       : code_(code), descriptor_(descriptor) {}
@@ -29,39 +29,74 @@ class Callable FINAL BASE_EMBEDDED {
 };
 
 
-class CodeFactory FINAL {
+class CodeFactory final {
  public:
   // Initial states for ICs.
-  static Callable LoadIC(Isolate* isolate, ContextualMode mode);
-  static Callable LoadICInOptimizedCode(Isolate* isolate, ContextualMode mode);
-  static Callable KeyedLoadIC(Isolate* isolate);
-  static Callable KeyedLoadICInOptimizedCode(Isolate* isolate);
+  static Callable LoadIC(Isolate* isolate, TypeofMode typeof_mode,
+                         LanguageMode language_mode);
+  static Callable LoadICInOptimizedCode(Isolate* isolate,
+                                        TypeofMode typeof_mode,
+                                        LanguageMode language_mode,
+                                        InlineCacheState initialization_state);
+  static Callable KeyedLoadIC(Isolate* isolate, LanguageMode language_mode);
+  static Callable KeyedLoadICInOptimizedCode(
+      Isolate* isolate, LanguageMode language_mode,
+      InlineCacheState initialization_state);
   static Callable CallIC(Isolate* isolate, int argc,
                          CallICState::CallType call_type);
   static Callable CallICInOptimizedCode(Isolate* isolate, int argc,
                                         CallICState::CallType call_type);
   static Callable StoreIC(Isolate* isolate, LanguageMode mode);
+  static Callable StoreICInOptimizedCode(Isolate* isolate, LanguageMode mode,
+                                         InlineCacheState initialization_state);
   static Callable KeyedStoreIC(Isolate* isolate, LanguageMode mode);
+  static Callable KeyedStoreICInOptimizedCode(
+      Isolate* isolate, LanguageMode mode,
+      InlineCacheState initialization_state);
 
-  static Callable CompareIC(Isolate* isolate, Token::Value op);
+  static Callable CompareIC(Isolate* isolate, Token::Value op,
+                            Strength strength);
 
-  static Callable BinaryOpIC(Isolate* isolate, Token::Value op);
+  static Callable BinaryOpIC(Isolate* isolate, Token::Value op,
+                             Strength strength);
 
   // Code stubs. Add methods here as needed to reduce dependency on
   // code-stubs.h.
+  static Callable LoadGlobalViaContext(Isolate* isolate, int depth);
+  static Callable StoreGlobalViaContext(Isolate* isolate, int depth,
+                                        LanguageMode language_mode);
+
+  static Callable InstanceOf(Isolate* isolate);
+
   static Callable ToBoolean(
       Isolate* isolate, ToBooleanStub::ResultMode mode,
       ToBooleanStub::Types types = ToBooleanStub::Types());
 
   static Callable ToNumber(Isolate* isolate);
+  static Callable ToString(Isolate* isolate);
+  static Callable ToObject(Isolate* isolate);
 
   static Callable StringAdd(Isolate* isolate, StringAddFlags flags,
                             PretenureFlag pretenure_flag);
+  static Callable StringCompare(Isolate* isolate);
+
+  static Callable Typeof(Isolate* isolate);
+
+  static Callable FastCloneShallowArray(Isolate* isolate);
+  static Callable FastCloneShallowObject(Isolate* isolate, int length);
+
+  static Callable FastNewClosure(Isolate* isolate, LanguageMode language_mode,
+                                 FunctionKind kind);
+
+  static Callable ArgumentsAccess(Isolate* isolate, bool is_unmapped_arguments,
+                                  bool has_duplicate_parameters);
 
   static Callable AllocateHeapNumber(Isolate* isolate);
 
   static Callable CallFunction(Isolate* isolate, int argc,
                                CallFunctionFlags flags);
+
+  static Callable PushArgsAndCall(Isolate* isolate);
 };
 
 }  // namespace internal

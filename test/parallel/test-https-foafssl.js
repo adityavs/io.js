@@ -53,6 +53,10 @@ server.listen(common.PORT, function() {
               '-cert', join(common.fixturesDir, 'foafssl.crt'),
               '-key', join(common.fixturesDir, 'foafssl.key')];
 
+  // for the performance and stability issue in s_client on Windows
+  if (common.isWindows)
+    args.push('-no_rand_screen');
+
   var client = spawn(common.opensslCli, args);
 
   client.stdout.on('data', function(data) {
@@ -79,5 +83,5 @@ process.on('exit', function() {
       'FDA7DE954ED56DC7AD9A47EEBC37D771A366FC60A5BCB72373BEC180649B3EFA0E90' +
       '92707210B41B90032BB18BC91F2046EBDAF1191F4A4E26D71879C4C7867B62FCD508' +
       'E8CE66E82D128A71E915809FCF44E8DE774067F1DE5D70B9C03687');
-  assert.equal(exponent, '10001');
+  assert.equal(exponent, '0x10001');
 });

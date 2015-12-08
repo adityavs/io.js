@@ -7,20 +7,32 @@
 
 #include "src/assembler.h"
 #include "src/bailout-reason.h"
+#include "src/base/flags.h"
 #include "src/frames.h"
 #include "src/globals.h"
+#include "src/x64/frames-x64.h"
 
 namespace v8 {
 namespace internal {
+
+// Give alias names to registers for calling conventions.
+const Register kReturnRegister0 = {kRegister_rax_Code};
+const Register kReturnRegister1 = {kRegister_rdx_Code};
+const Register kJSFunctionRegister = {kRegister_rdi_Code};
+const Register kContextRegister = {kRegister_rsi_Code};
+const Register kInterpreterAccumulatorRegister = {kRegister_rax_Code};
+const Register kInterpreterRegisterFileRegister = {kRegister_r11_Code};
+const Register kInterpreterBytecodeOffsetRegister = {kRegister_r12_Code};
+const Register kInterpreterBytecodeArrayRegister = {kRegister_r14_Code};
+const Register kInterpreterDispatchTableRegister = {kRegister_r15_Code};
+const Register kRuntimeCallFunctionRegister = {kRegister_rbx_Code};
+const Register kRuntimeCallArgCountRegister = {kRegister_rax_Code};
 
 // Default scratch register used by MacroAssembler (and other code that needs
 // a spare register). The register isn't callee save, and not used by the
 // function calling convention.
 const Register kScratchRegister = { 10 };      // r10.
-const Register kSmiConstantRegister = { 12 };  // r12 (callee save).
 const Register kRootRegister = { 13 };         // r13 (callee save).
-// Value of smi in kSmiConstantRegister.
-const int kSmiConstantRegisterValue = 1;
 // Actual value of root register is offset from the root array's start
 // to take advantage of negitive 8-bit displacement values.
 const int kRootRegisterBias = 128;
@@ -35,21 +47,15 @@ enum PointersToHereCheck {
   kPointersToHereAreAlwaysInteresting
 };
 
-enum SmiOperationConstraint {
-  PRESERVE_SOURCE_REGISTER,
-  BAILOUT_ON_NO_OVERFLOW,
-  BAILOUT_ON_OVERFLOW,
-  NUMBER_OF_CONSTRAINTS
+enum class SmiOperationConstraint {
+  kPreserveSourceRegister = 1 << 0,
+  kBailoutOnNoOverflow = 1 << 1,
+  kBailoutOnOverflow = 1 << 2
 };
 
-STATIC_ASSERT(NUMBER_OF_CONSTRAINTS <= 8);
+typedef base::Flags<SmiOperationConstraint> SmiOperationConstraints;
 
-class SmiOperationExecutionMode : public EnumSet<SmiOperationConstraint, byte> {
- public:
-  SmiOperationExecutionMode() : EnumSet<SmiOperationConstraint, byte>(0) { }
-  explicit SmiOperationExecutionMode(byte bits)
-      : EnumSet<SmiOperationConstraint, byte>(bits) { }
-};
+DEFINE_OPERATORS_FOR_FLAGS(SmiOperationConstraints)
 
 #ifdef DEBUG
 bool AreAliased(Register reg1,
@@ -127,6 +133,10 @@ class MacroAssembler: public Assembler {
 
   // Operations on roots in the root-array.
   void LoadRoot(Register destination, Heap::RootListIndex index);
+  void LoadRoot(const Operand& destination, Heap::RootListIndex index) {
+    LoadRoot(kScratchRegister, index);
+    movp(destination, kScratchRegister);
+  }
   void StoreRoot(Register source, Heap::RootListIndex index);
   // Load a root value where the index (or part of it) is variable.
   // The variable_offset register is added to the fixed_offset value
@@ -137,6 +147,21 @@ class MacroAssembler: public Assembler {
   void CompareRoot(Register with, Heap::RootListIndex index);
   void CompareRoot(const Operand& with, Heap::RootListIndex index);
   void PushRoot(Heap::RootListIndex index);
+
+  // Compare the object in a register to a value and jump if they are equal.
+  void JumpIfRoot(Register with, Heap::RootListIndex index, Label* if_equal,
+                  Label::Distance if_equal_distance = Label::kNear) {
+    CompareRoot(with, index);
+    j(equal, if_equal, if_equal_distance);
+  }
+
+  // Compare the object in a register to a value and jump if they are not equal.
+  void JumpIfNotRoot(Register with, Heap::RootListIndex index,
+                     Label* if_not_equal,
+                     Label::Distance if_not_equal_distance = Label::kNear) {
+    CompareRoot(with, index);
+    j(not_equal, if_not_equal, if_not_equal_distance);
+  }
 
   // These functions do not arrange the registers in any particular order so
   // they are not useful for calls that can cause a GC.  The caller can
@@ -369,17 +394,15 @@ class MacroAssembler: public Assembler {
                       InvokeFlag flag,
                       const CallWrapper& call_wrapper);
 
-  // Invoke specified builtin JavaScript function. Adds an entry to
-  // the unresolved list if the name does not resolve.
-  void InvokeBuiltin(Builtins::JavaScript id,
-                     InvokeFlag flag,
+  // Invoke specified builtin JavaScript function.
+  void InvokeBuiltin(int native_context_index, InvokeFlag flag,
                      const CallWrapper& call_wrapper = NullCallWrapper());
 
   // Store the function for the given builtin in the target register.
-  void GetBuiltinFunction(Register target, Builtins::JavaScript id);
+  void GetBuiltinFunction(Register target, int native_context_index);
 
   // Store the code object for the given builtin in the target register.
-  void GetBuiltinEntry(Register target, Builtins::JavaScript id);
+  void GetBuiltinEntry(Register target, int native_context_index);
 
 
   // ---------------------------------------------------------------------------
@@ -389,11 +412,6 @@ class MacroAssembler: public Assembler {
   bool IsUnsafeInt(const int32_t x);
   void SafeMove(Register dst, Smi* src);
   void SafePush(Smi* src);
-
-  void InitializeSmiConstantRegister() {
-    Move(kSmiConstantRegister, Smi::FromInt(kSmiConstantRegisterValue),
-         Assembler::RelocInfoNone());
-  }
 
   // Conversions between tagged smi values and non-tagged integer values.
 
@@ -473,11 +491,6 @@ class MacroAssembler: public Assembler {
   Condition CheckEitherSmi(Register first,
                            Register second,
                            Register scratch = kScratchRegister);
-
-  // Is the value the minimum smi value (since we are using
-  // two's complement numbers, negating the value is known to yield
-  // a non-smi value).
-  Condition CheckIsMinSmi(Register src);
 
   // Checks whether an 32-bit integer value is a valid for conversion
   // to a smi.
@@ -559,11 +572,8 @@ class MacroAssembler: public Assembler {
 
   // Add an integer constant to a tagged smi, giving a tagged smi as result,
   // or jumping to a label if the result cannot be represented by a smi.
-  void SmiAddConstant(Register dst,
-                      Register src,
-                      Smi* constant,
-                      SmiOperationExecutionMode mode,
-                      Label* bailout_label,
+  void SmiAddConstant(Register dst, Register src, Smi* constant,
+                      SmiOperationConstraints constraints, Label* bailout_label,
                       Label::Distance near_jump = Label::kFar);
 
   // Subtract an integer constant from a tagged smi, giving a tagged smi as
@@ -573,11 +583,8 @@ class MacroAssembler: public Assembler {
 
   // Subtract an integer constant from a tagged smi, giving a tagged smi as
   // result, or jumping to a label if the result cannot be represented by a smi.
-  void SmiSubConstant(Register dst,
-                      Register src,
-                      Smi* constant,
-                      SmiOperationExecutionMode mode,
-                      Label* bailout_label,
+  void SmiSubConstant(Register dst, Register src, Smi* constant,
+                      SmiOperationConstraints constraints, Label* bailout_label,
                       Label::Distance near_jump = Label::kFar);
 
   // Negating a smi can give a negative zero or too large positive value.
@@ -752,17 +759,6 @@ class MacroAssembler: public Assembler {
   // ---------------------------------------------------------------------------
   // String macros.
 
-  // Generate code to do a lookup in the number string cache. If the number in
-  // the register object is found in the cache the generated code falls through
-  // with the result in the result register. The object and the result register
-  // can be the same. If the number is not found in the cache the code jumps to
-  // the label not_found with only the content of register object unchanged.
-  void LookupNumberStringCache(Register object,
-                               Register result,
-                               Register scratch1,
-                               Register scratch2,
-                               Label* not_found);
-
   // If object is a string, its map is loaded into object_map.
   void JumpIfNotString(Register object,
                        Register object_map,
@@ -935,10 +931,18 @@ class MacroAssembler: public Assembler {
     Call(self, RelocInfo::CODE_TARGET);
   }
 
+  // Non-SSE2 instructions.
+  void Pextrd(Register dst, XMMRegister src, int8_t imm8);
+  void Pinsrd(XMMRegister dst, Register src, int8_t imm8);
+  void Pinsrd(XMMRegister dst, const Operand& src, int8_t imm8);
+
+  void Lzcntl(Register dst, Register src);
+  void Lzcntl(Register dst, const Operand& src);
+
   // Non-x64 instructions.
   // Push/pop all general purpose registers.
   // Does not push rsp/rbp nor any of the assembler's special purpose registers
-  // (kScratchRegister, kSmiConstantRegister, kRootRegister).
+  // (kScratchRegister, kRootRegister).
   void Pushad();
   void Popad();
   // Sets the stack as after performing Popad, without actually loading the
@@ -1101,6 +1105,9 @@ class MacroAssembler: public Assembler {
   // Abort execution if argument is not a name, enabled via --debug-code.
   void AssertName(Register object);
 
+  // Abort execution if argument is not a JSFunction, enabled via --debug-code.
+  void AssertFunction(Register object);
+
   // Abort execution if argument is not undefined or an AllocationSite, enabled
   // via --debug-code.
   void AssertUndefinedOrAllocationSite(Register object);
@@ -1114,18 +1121,11 @@ class MacroAssembler: public Assembler {
   // ---------------------------------------------------------------------------
   // Exception handling
 
-  // Push a new try handler and link it into try handler chain.
-  void PushTryHandler(StackHandler::Kind kind, int handler_index);
+  // Push a new stack handler and link it into stack handler chain.
+  void PushStackHandler();
 
-  // Unlink the stack handler on top of the stack from the try handler chain.
-  void PopTryHandler();
-
-  // Activate the top handler in the try hander chain and pass the
-  // thrown value.
-  void Throw(Register value);
-
-  // Propagate an uncatchable exception out of the current JS stack.
-  void ThrowUncatchable(Register value);
+  // Unlink the stack handler on top of the stack from the stack handler chain.
+  void PopStackHandler();
 
   // ---------------------------------------------------------------------------
   // Inline caching support
@@ -1152,7 +1152,7 @@ class MacroAssembler: public Assembler {
   // ---------------------------------------------------------------------------
   // Allocation support
 
-  // Allocate an object in new space or old pointer space. If the given space
+  // Allocate an object in new space or old space. If the given space
   // is exhausted control continues at the gc_required label. The allocated
   // object is returned in result and end of the new object is returned in
   // result_end. The register scratch can be passed as no_reg in which case
@@ -1184,12 +1184,6 @@ class MacroAssembler: public Assembler {
                 Register scratch,
                 Label* gc_required,
                 AllocationFlags flags);
-
-  // Undo allocation in new space. The object passed and objects allocated after
-  // it will no longer be allocated. Make sure that no pointers are left to the
-  // object(s) no longer allocated as they would be invalid when allocation is
-  // un-done.
-  void UndoAllocationInNewSpace(Register object);
 
   // Allocate a heap number in new space with undefined value. Returns
   // tagged pointer in result register, or jumps to gc_required if new
@@ -1246,15 +1240,16 @@ class MacroAssembler: public Assembler {
   void NegativeZeroTest(Register result, Register op1, Register op2,
                         Register scratch, Label* then_label);
 
+  // Machine code version of Map::GetConstructor().
+  // |temp| holds |result|'s map when done.
+  void GetMapConstructor(Register result, Register map, Register temp);
+
   // Try to get function prototype of a function and puts the value in
   // the result register. Checks that the function really is a
   // function and jumps to the miss label if the fast checks fail. The
   // function register will be untouched; the other register may be
   // clobbered.
-  void TryGetFunctionPrototype(Register function,
-                               Register result,
-                               Label* miss,
-                               bool miss_on_bound_function = false);
+  void TryGetFunctionPrototype(Register function, Register result, Label* miss);
 
   // Picks out an array index from the hash field.
   // Register use:
@@ -1264,6 +1259,9 @@ class MacroAssembler: public Assembler {
 
   // Find the function context up the context chain.
   void LoadContext(Register dst, int context_chain_length);
+
+  // Load the global proxy from the current context.
+  void LoadGlobalProxy(Register dst);
 
   // Conditionally load the cached Array transitioned map of type
   // transitioned_kind from the native context if the map in register
@@ -1428,6 +1426,9 @@ class MacroAssembler: public Assembler {
     return SafepointRegisterStackIndex(reg.code());
   }
 
+  // Load the type feedback vector from a JavaScript frame.
+  void EmitLoadTypeFeedbackVector(Register vector);
+
   // Activation support.
   void EnterFrame(StackFrame::Type type);
   void EnterFrame(StackFrame::Type type, bool load_constant_pool_pointer_reg);
@@ -1464,9 +1465,9 @@ class MacroAssembler: public Assembler {
 
  private:
   // Order general registers are pushed by Pushad.
-  // rax, rcx, rdx, rbx, rsi, rdi, r8, r9, r11, r14, r15.
+  // rax, rcx, rdx, rbx, rsi, rdi, r8, r9, r11, r12, r14, r15.
   static const int kSafepointPushRegisterIndices[Register::kNumRegisters];
-  static const int kNumSafepointSavedRegisters = 11;
+  static const int kNumSafepointSavedRegisters = 12;
   static const int kSmiShift = kSmiTagSize + kSmiShiftSize;
 
   bool generating_stub_;
@@ -1538,10 +1539,6 @@ class MacroAssembler: public Assembler {
                           Register bitmap_reg,
                           Register mask_reg);
 
-  // Helper for throwing exceptions.  Compute a handler address and jump to
-  // it.  See the implementation for register usage.
-  void JumpToHandlerEntry();
-
   // Compute memory operands for safepoint stack slots.
   Operand SafepointRegisterSlot(Register reg);
   static int SafepointRegisterStackIndex(int reg_code) {
@@ -1562,7 +1559,7 @@ class MacroAssembler: public Assembler {
 class CodePatcher {
  public:
   CodePatcher(byte* address, int size);
-  virtual ~CodePatcher();
+  ~CodePatcher();
 
   // Macro assembler to emit code.
   MacroAssembler* masm() { return &masm_; }
@@ -1594,6 +1591,11 @@ inline Operand FieldOperand(Register object,
 
 inline Operand ContextOperand(Register context, int index) {
   return Operand(context, Context::SlotOffset(index));
+}
+
+
+inline Operand ContextOperand(Register context, Register index) {
+  return Operand(context, index, times_pointer_size, Context::SlotOffset(0));
 }
 
 

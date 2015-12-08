@@ -2,7 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --harmony-classes --allow-natives-syntax
+// Flags: --harmony-arrow-functions --allow-natives-syntax
+// Flags: --harmony-spread-calls --harmony-destructuring
+// Flags: --harmony-rest-parameters --harmony-sloppy
 
 (function TestSuperNamedLoads() {
   function Base() { }
@@ -76,39 +78,6 @@
 
   assertEquals("Base this is Base", new Base().f());
   assertEquals("Derived", new Derived().f());
-}());
-
-
-(function TestSuperNumericKeyedLoads() {
-  var x = 1;
-  var derivedDataProperty = 2;
-  var f = 3;
-
-  function Base() { }
-  function fBase() { return "Base " + this.toString(); }
-  Base.prototype[f] = %ToMethod(fBase, Base.prototype);
-  Base.prototype[x] = 15;
-  Base.prototype.toString = function() { return "this is Base"; };
-
-  function Derived() {
-    this[derivedDataProperty] = "xxx";
-  }
-  Derived.prototype = {
-    __proto__: Base.prototype,
-    toString() { return "this is Derived"; },
-    1: 27,
-    3() {
-      assertEquals("Base this is Derived", super[f]());
-      var a = super[x];
-      assertEquals(15, a);
-      assertEquals(15, super[x]);
-      assertEquals(27, this[x]);
-      return "Derived";
-    }
-  };
-
-  assertEquals("Base this is Base", new Base()[f]());
-  assertEquals("Derived", new Derived()[f]());
 }());
 
 
@@ -1978,7 +1947,8 @@ TestKeyedSetterCreatingOwnPropertiesNonConfigurable(42, 43, 44);
 
   class Derived extends Base {
     constructor() {
-      super();
+      let r = super();
+      assertEquals(this, r);
       derivedCalled++;
     }
   }
@@ -1994,7 +1964,8 @@ TestKeyedSetterCreatingOwnPropertiesNonConfigurable(42, 43, 44);
 
   class DerivedDerived extends Derived {
     constructor() {
-      super();
+      let r = super();
+      assertEquals(this, r);
       derivedDerivedCalled++;
     }
   }
@@ -2014,7 +1985,8 @@ TestKeyedSetterCreatingOwnPropertiesNonConfigurable(42, 43, 44);
   }
   class Derived2 extends Base2 {
     constructor(v1, v2) {
-      super(v1);
+      let r = super(v1);
+      assertEquals(this, r);
       this.fromDerived = v2;
     }
   }
@@ -2053,6 +2025,7 @@ TestKeyedSetterCreatingOwnPropertiesNonConfigurable(42, 43, 44);
   assertInstanceof(f, Number);
 }());
 
+
 (function TestSuperCallErrorCases() {
   'use strict';
   class T extends Object {
@@ -2064,3 +2037,223 @@ TestKeyedSetterCreatingOwnPropertiesNonConfigurable(42, 43, 44);
   T.__proto__ = null;
   assertThrows(function() { new T(); }, TypeError);
 }());
+
+
+(function TestSuperPropertyInEval() {
+  'use strict';
+  let y = 3;
+  class Base {
+    m() { return 1; }
+    get x() { return 2; }
+  }
+  class Derived extends Base {
+    evalM() {
+      assertEquals(1, eval('super.m()'));
+    }
+    evalX() {
+      assertEquals(2, eval('super.x'));
+    }
+    globalEval1() {
+      assertThrows('super.x', SyntaxError);
+      assertThrows('super.m()', SyntaxError);
+    }
+    globalEval2() {
+      super.x;
+      assertThrows('super.x', SyntaxError);
+      assertThrows('super.m()', SyntaxError);
+    }
+  }
+  let d = new Derived();
+  d.globalEval1();
+  d.globalEval2();
+  d.evalM();
+  d.evalX();
+})();
+
+
+(function TestSuperPropertyInArrow() {
+  'use strict';
+  let y = 3;
+  class Base {
+    m() { return 1; }
+    get x() { return 2; }
+  }
+  class Derived extends Base {
+    arrow() {
+      assertSame(super.x, (() => super.x)());
+      assertSame(super.m(), (() => super.m())());
+      return (() => super.m())();
+    }
+  }
+  let d = new Derived();
+  assertSame(1, d.arrow());
+})();
+
+
+(function TestSuperInOtherScopes() {
+  var p = {x: 99};
+  var o0 = {__proto__: p, f() { return eval("'use strict'; super.x") }};
+  assertEquals(p.x, o0.f());
+  var o1 = {__proto__: p, f() { with ({}) return super.x }};
+  assertEquals(p.x, o1.f());
+  var o2 = {__proto__: p, f({a}) { return super.x }};
+  assertEquals(p.x, o2.f({}));
+  var o3 = {__proto__: p, f(...a) { return super.x }};
+  assertEquals(p.x, o3.f());
+  var o4 = {__proto__: p, f() { 'use strict'; { let x; return super.x } }};
+  assertEquals(p.x, o4.f());
+})();
+
+
+(function TestSuperCallInOtherScopes() {
+  class C {constructor() { this.x = 99 }}
+  class D0 extends C {constructor() { eval("'use strict'; super()") }}
+  assertEquals(99, (new D0).x);
+  class D2 extends C {constructor({a}) { super() }}
+  assertEquals(99, (new D2({})).x);
+  class D3 extends C {constructor(...a) { super() }}
+  assertEquals(99, (new D3()).x);
+  class D4 extends C {constructor() { { let x; super() } }}
+  assertEquals(99, (new D4).x);
+})();
+
+
+(function TestSuperCallInEval() {
+  'use strict';
+  class Base {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+  class Derived extends Base {
+    constructor(x) {
+      let r = eval('super(x)');
+      assertEquals(this, r);
+    }
+  }
+  let d = new Derived(42);
+  assertSame(42, d.x);
+})();
+
+
+(function TestSuperCallInArrow() {
+  'use strict';
+  class Base {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+  class Derived extends Base {
+    constructor(x) {
+      let r = (() => super(x))();
+      assertEquals(this, r);
+    }
+  }
+  let d = new Derived(42);
+  assertSame(42, d.x);
+})();
+
+
+(function TestSuperCallEscapes() {
+  'use strict';
+  class Base {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+
+  let f;
+  class Derived extends Base {
+    constructor() {
+      f = () => super(2);
+    }
+  }
+  assertThrows(function() {
+    new Derived();
+  }, ReferenceError);
+
+  let o = f();
+  assertEquals(2, o.x);
+  assertInstanceof(o, Derived);
+
+  assertThrows(function() {
+    f();
+  }, ReferenceError);
+})();
+
+
+(function TestSuperCallInLoop() {
+  'use strict';
+  class Base {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+  class Derived extends Base {
+    constructor(x, n) {
+      for (var i = 0; i < n; ++i) {
+        super(x);
+      }
+    }
+  }
+
+  let o = new Derived(23, 1);
+  assertEquals(23, o.x);
+  assertInstanceof(o, Derived);
+
+  assertThrows("new Derived(42, 0)", ReferenceError);
+  assertThrows("new Derived(65, 2)", ReferenceError);
+})();
+
+
+(function TestSuperCallReentrant() {
+  'use strict';
+  class Base {
+    constructor(fun) {
+      this.x = fun();
+    }
+  }
+  class Derived extends Base {
+    constructor(x) {
+      let f = () => super(() => x)
+      super(f);
+    }
+  }
+  assertThrows("new Derived(23)", ReferenceError);
+})();
+
+
+(function TestSuperCallSpreadInEval() {
+  'use strict';
+  class Base {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+  class Derived extends Base {
+    constructor(x) {
+      let r = eval('super(...[x])');
+      assertEquals(this, r);
+    }
+  }
+  let d = new Derived(42);
+  assertSame(42, d.x);
+})();
+
+
+(function TestSuperCallSpreadInArrow() {
+  'use strict';
+  class Base {
+    constructor(x) {
+      this.x = x;
+    }
+  }
+  class Derived extends Base {
+    constructor(x) {
+      let r = (() => super(...[x]))();
+      assertEquals(this, r);
+    }
+  }
+  let d = new Derived(42);
+  assertSame(42, d.x);
+})();

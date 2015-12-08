@@ -6,7 +6,6 @@
 #include "node_crypto_bio.h"  // NodeBIO
 #include "node_crypto_clienthello.h"  // ClientHelloParser
 #include "node_crypto_clienthello-inl.h"
-#include "node_wrap.h"  // WithGenericStream
 #include "node_counters.h"
 #include "node_internals.h"
 #include "stream_base.h"
@@ -25,7 +24,6 @@ using v8::Exception;
 using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
-using v8::Handle;
 using v8::Integer;
 using v8::Local;
 using v8::Null;
@@ -63,12 +61,12 @@ TLSWrap::TLSWrap(Environment* env,
   SSL_CTX_sess_set_new_cb(sc_->ctx_, SSLWrap<TLSWrap>::NewSessionCallback);
 
   stream_->Consume();
-  stream_->set_after_write_cb(OnAfterWriteImpl, this);
-  stream_->set_alloc_cb(OnAllocImpl, this);
-  stream_->set_read_cb(OnReadImpl, this);
+  stream_->set_after_write_cb({ OnAfterWriteImpl, this });
+  stream_->set_alloc_cb({ OnAllocImpl, this });
+  stream_->set_read_cb({ OnReadImpl, this });
 
-  set_alloc_cb(OnAllocSelf, this);
-  set_read_cb(OnReadSelf, this);
+  set_alloc_cb({ OnAllocSelf, this });
+  set_read_cb({ OnReadSelf, this });
 
   InitSSL();
 }
@@ -154,7 +152,7 @@ void TLSWrap::InitSSL() {
     SSL_set_connect_state(ssl_);
   } else {
     // Unexpected
-    abort();
+    ABORT();
   }
 
   // Initialize ring for queud clear data
@@ -177,15 +175,12 @@ void TLSWrap::Wrap(const FunctionCallbackInfo<Value>& args) {
   if (args.Length() < 3 || !args[2]->IsBoolean())
     return env->ThrowTypeError("Third argument should be boolean");
 
-  Local<Object> stream_obj = args[0].As<Object>();
+  Local<External> stream_obj = args[0].As<External>();
   Local<Object> sc = args[1].As<Object>();
   Kind kind = args[2]->IsTrue() ? SSLWrap<TLSWrap>::kServer :
                                   SSLWrap<TLSWrap>::kClient;
 
-  StreamBase* stream = nullptr;
-  WITH_GENERIC_STREAM(env, stream_obj, {
-    stream = wrap;
-  });
+  StreamBase* stream = static_cast<StreamBase*>(stream_obj->Value());
   CHECK_NE(stream, nullptr);
 
   TLSWrap* res = new TLSWrap(env, kind, stream, Unwrap<SecureContext>(sc));
@@ -414,6 +409,7 @@ void TLSWrap::ClearOut() {
     if (read <= 0)
       break;
 
+    char* current = out;
     while (read > 0) {
       int avail = read;
 
@@ -421,10 +417,11 @@ void TLSWrap::ClearOut() {
       OnAlloc(avail, &buf);
       if (static_cast<int>(buf.len) < avail)
         avail = buf.len;
-      memcpy(buf.base, out, avail);
+      memcpy(buf.base, current, avail);
       OnRead(avail, &buf);
 
       read -= avail;
+      current += avail;
     }
   }
 
@@ -436,7 +433,7 @@ void TLSWrap::ClearOut() {
 
   // We need to check whether an error occurred or the connection was
   // shutdown cleanly (SSL_ERROR_ZERO_RETURN) even when read == 0.
-  // See iojs#1642 and SSL_read(3SSL) for details.
+  // See node#1642 and SSL_read(3SSL) for details.
   if (read <= 0) {
     int err;
     Local<Value> arg = GetSSLError(read, &err, nullptr);
@@ -565,8 +562,8 @@ int TLSWrap::DoWrite(WriteWrap* w,
     }
   if (empty) {
     ClearOut();
-    // However if there any data that should be written to socket,
-    // callback should not be invoked immediately
+    // However, if there is any data that should be written to the socket,
+    // the callback should not be invoked immediately
     if (BIO_pending(enc_out_) == 0)
       return stream_->DoWrite(w, bufs, count, send_handle);
   }
@@ -660,7 +657,7 @@ void TLSWrap::OnReadSelf(ssize_t nread,
   TLSWrap* wrap = static_cast<TLSWrap*>(ctx);
   Local<Object> buf_obj;
   if (buf != nullptr)
-    buf_obj = Buffer::Use(wrap->env(), buf->base, buf->len);
+    buf_obj = Buffer::New(wrap->env(), buf->base, buf->len).ToLocalChecked();
   wrap->EmitData(nread, buf_obj, Local<Object>());
 }
 
@@ -862,16 +859,15 @@ int TLSWrap::SelectSNIContextCallback(SSL* s, int* ad, void* arg) {
   p->sni_context_.Reset(env->isolate(), ctx);
 
   SecureContext* sc = Unwrap<SecureContext>(ctx.As<Object>());
-  InitNPN(sc);
-  SSL_set_SSL_CTX(s, sc->ctx_);
+  p->SetSNIContext(sc);
   return SSL_TLSEXT_ERR_OK;
 }
 #endif  // SSL_CTRL_SET_TLSEXT_SERVERNAME_CB
 
 
-void TLSWrap::Initialize(Handle<Object> target,
-                         Handle<Value> unused,
-                         Handle<Context> context) {
+void TLSWrap::Initialize(Local<Object> target,
+                         Local<Value> unused,
+                         Local<Context> context) {
   Environment* env = Environment::GetCurrent(context);
 
   env->SetMethod(target, "wrap", TLSWrap::Wrap);

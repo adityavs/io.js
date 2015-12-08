@@ -24,7 +24,7 @@ class ObjectWrap {
 
 
   template <class T>
-  static inline T* Unwrap(v8::Handle<v8::Object> handle) {
+  static inline T* Unwrap(v8::Local<v8::Object> handle) {
     assert(!handle.IsEmpty());
     assert(handle->InternalFieldCount() > 0);
     // Cast to ObjectWrap before casting to T.  A direct cast from void
@@ -51,7 +51,7 @@ class ObjectWrap {
 
 
  protected:
-  inline void Wrap(v8::Handle<v8::Object> handle) {
+  inline void Wrap(v8::Local<v8::Object> handle) {
     assert(persistent().IsEmpty());
     assert(handle->InternalFieldCount() > 0);
     handle->SetAlignedPointerInInternalField(0, this);
@@ -80,7 +80,7 @@ class ObjectWrap {
    * attached to detached state it will be freed. Be careful not to access
    * the object after making this call as it might be gone!
    * (A "weak reference" means an object that only has a
-   * persistant handle.)
+   * persistent handle.)
    *
    * DO NOT CALL THIS FROM DESTRUCTOR
    */

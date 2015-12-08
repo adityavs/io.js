@@ -6,8 +6,6 @@
 
 #include <sstream>
 
-#include "src/v8.h"
-
 #if V8_TARGET_ARCH_IA32
 #include "src/ia32/lithium-ia32.h"  // NOLINT
 #include "src/ia32/lithium-codegen-ia32.h"  // NOLINT
@@ -45,8 +43,7 @@ HGraph* LCodeGenBase::graph() const {
 }
 
 
-LCodeGenBase::LCodeGenBase(LChunk* chunk,
-                           MacroAssembler* assembler,
+LCodeGenBase::LCodeGenBase(LChunk* chunk, MacroAssembler* assembler,
                            CompilationInfo* info)
     : chunk_(static_cast<LPlatformChunk*>(chunk)),
       masm_(assembler),
@@ -56,8 +53,8 @@ LCodeGenBase::LCodeGenBase(LChunk* chunk,
       current_block_(-1),
       current_instruction_(-1),
       instructions_(chunk->instructions()),
-      last_lazy_deopt_pc_(0) {
-}
+      deoptimization_literals_(8, info->zone()),
+      last_lazy_deopt_pc_(0) {}
 
 
 bool LCodeGenBase::GenerateBody() {
@@ -153,7 +150,7 @@ void LCodeGenBase::Comment(const char* format, ...) {
 
 
 void LCodeGenBase::DeoptComment(const Deoptimizer::DeoptInfo& deopt_info) {
-  masm()->RecordDeoptReason(deopt_info.deopt_reason, deopt_info.raw_position);
+  masm()->RecordDeoptReason(deopt_info.deopt_reason, deopt_info.position);
 }
 
 
@@ -189,4 +186,107 @@ void LCodeGenBase::AddStabilityDependency(Handle<Map> map) {
   chunk_->AddStabilityDependency(map);
 }
 
-} }  // namespace v8::internal
+
+int LCodeGenBase::DefineDeoptimizationLiteral(Handle<Object> literal) {
+  int result = deoptimization_literals_.length();
+  for (int i = 0; i < deoptimization_literals_.length(); ++i) {
+    if (deoptimization_literals_[i].is_identical_to(literal)) return i;
+  }
+  deoptimization_literals_.Add(literal, zone());
+  return result;
+}
+
+
+void LCodeGenBase::WriteTranslationFrame(LEnvironment* environment,
+                                         Translation* translation) {
+  int translation_size = environment->translation_size();
+  // The output frame height does not include the parameters.
+  int height = translation_size - environment->parameter_count();
+
+  switch (environment->frame_type()) {
+    case JS_FUNCTION: {
+      int shared_id = DefineDeoptimizationLiteral(
+          environment->entry() ? environment->entry()->shared()
+                               : info()->shared_info());
+      translation->BeginJSFrame(environment->ast_id(), shared_id, height);
+      if (info()->closure().is_identical_to(environment->closure())) {
+        translation->StoreJSFrameFunction();
+      } else {
+        int closure_id = DefineDeoptimizationLiteral(environment->closure());
+        translation->StoreLiteral(closure_id);
+      }
+      break;
+    }
+    case JS_CONSTRUCT: {
+      int shared_id = DefineDeoptimizationLiteral(
+          environment->entry() ? environment->entry()->shared()
+                               : info()->shared_info());
+      translation->BeginConstructStubFrame(shared_id, translation_size);
+      if (info()->closure().is_identical_to(environment->closure())) {
+        translation->StoreJSFrameFunction();
+      } else {
+        int closure_id = DefineDeoptimizationLiteral(environment->closure());
+        translation->StoreLiteral(closure_id);
+      }
+      break;
+    }
+    case JS_GETTER: {
+      DCHECK(translation_size == 1);
+      DCHECK(height == 0);
+      int shared_id = DefineDeoptimizationLiteral(
+          environment->entry() ? environment->entry()->shared()
+                               : info()->shared_info());
+      translation->BeginGetterStubFrame(shared_id);
+      if (info()->closure().is_identical_to(environment->closure())) {
+        translation->StoreJSFrameFunction();
+      } else {
+        int closure_id = DefineDeoptimizationLiteral(environment->closure());
+        translation->StoreLiteral(closure_id);
+      }
+      break;
+    }
+    case JS_SETTER: {
+      DCHECK(translation_size == 2);
+      DCHECK(height == 0);
+      int shared_id = DefineDeoptimizationLiteral(
+          environment->entry() ? environment->entry()->shared()
+                               : info()->shared_info());
+      translation->BeginSetterStubFrame(shared_id);
+      if (info()->closure().is_identical_to(environment->closure())) {
+        translation->StoreJSFrameFunction();
+      } else {
+        int closure_id = DefineDeoptimizationLiteral(environment->closure());
+        translation->StoreLiteral(closure_id);
+      }
+      break;
+    }
+    case ARGUMENTS_ADAPTOR: {
+      int shared_id = DefineDeoptimizationLiteral(
+          environment->entry() ? environment->entry()->shared()
+                               : info()->shared_info());
+      translation->BeginArgumentsAdaptorFrame(shared_id, translation_size);
+      if (info()->closure().is_identical_to(environment->closure())) {
+        translation->StoreJSFrameFunction();
+      } else {
+        int closure_id = DefineDeoptimizationLiteral(environment->closure());
+        translation->StoreLiteral(closure_id);
+      }
+      break;
+    }
+    case STUB:
+      translation->BeginCompiledStubFrame(translation_size);
+      break;
+  }
+}
+
+
+Deoptimizer::DeoptInfo LCodeGenBase::MakeDeoptInfo(
+    LInstruction* instr, Deoptimizer::DeoptReason deopt_reason) {
+  Deoptimizer::DeoptInfo deopt_info(instr->hydrogen_value()->position(),
+                                    instr->Mnemonic(), deopt_reason);
+  HEnterInlined* enter_inlined = instr->environment()->entry();
+  deopt_info.inlining_id = enter_inlined ? enter_inlined->inlining_id() : 0;
+  return deopt_info;
+}
+}  // namespace internal
+}  // namespace v8

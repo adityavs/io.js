@@ -64,43 +64,61 @@
   # are actually 13 * 38 * 5 * 128 = 316160 individual tests hidden here.
   'test-parsing/ParserSync': [PASS, NO_VARIANTS],
 
-  # Modules are busted
-  'test-parsing/ExportsMaybeAssigned': [SKIP],
-
-  # This tests only the type system, so there is no point in running several
-  # variants.
+  # This tests only the type system, no point in running several variants.
   'test-hydrogen-types/*': [PASS, NO_VARIANTS],
   'test-types/*': [PASS, NO_VARIANTS],
+
+  # This tests API threading, no point in running several variants.
+  'test-api/Threading*': [PASS, NO_VARIANTS],
 
   # The cpu profiler tests are notoriously flaky.
   # BUG(2999). (test/cpu-profiler/CollectCpuProfile)
   # BUG(3287). (test-cpu-profiler/SampleWhenFrameIsNotSetup)
-  'test-cpu-profiler/*': [PASS, FLAKY],
-  'test-cpu-profiler/*': [SKIP],
+  'test-cpu-profiler/CollectCpuProfile': [SKIP],
+  'test-cpu-profiler/CollectCpuProfileSamples': [SKIP],
+  'test-cpu-profiler/FunctionApplySample': [SKIP],
+  'test-cpu-profiler/FunctionCallSample': [SKIP],
+  'test-cpu-profiler/SampleWhenFrameIsNotSetup': [SKIP],
+  'test-cpu-profiler/HotDeoptNoFrameEntry': [SKIP],
+  'test-cpu-profiler/BoundFunctionCall': [SKIP],
+  'test-cpu-profiler/CpuProfileDeepStack': [SKIP],
+  'test-cpu-profiler/JsNativeJsSample': [SKIP],
+  'test-cpu-profiler/JsNativeJsRuntimeJsSample': [SKIP],
+  'test-cpu-profiler/JsNative1JsNative2JsSample': [SKIP],
 
   # BUG(3525). Test crashes flakily.
   'test-debug/RecursiveBreakpoints': [PASS, FLAKY],
   'test-debug/RecursiveBreakpointsGlobal': [PASS, FLAKY],
 
+  # Fails sometimes.
+  'test-debug/ProcessDebugMessagesThreaded': [PASS, FLAKY],
+
+  # BUG(2340). Preprocessing stack traces is disabled at the moment.
+  'test-heap/PreprocessStackTrace': [FAIL],
+
+  # BUG(4333). Function name inferrer does not work for ES6 clases.
+  'test-func-name-inference/UpperCaseClass': [FAIL],
+  'test-func-name-inference/LowerCaseClass': [FAIL],
+
   ##############################################################################
   # TurboFan compiler failures.
 
   # Some tests are just too slow to run for now.
-  'test-api/Threading*': [PASS, NO_VARIANTS],
   'test-heap/IncrementalMarkingStepMakesBigProgressWithLargeObjects': [PASS, NO_VARIANTS],
   'test-heap-profiler/ManyLocalsInSharedContext': [PASS, NO_VARIANTS],
+  'test-serialize/SerializeToplevelLargeCodeObject': [PASS, NO_VARIANTS],
   'test-debug/ThreadedDebugging': [PASS, NO_VARIANTS],
-  'test-debug/DebugBreakLoop': [PASS, NO_VARIANTS],
   # BUG(3742).
   'test-mark-compact/MarkCompactCollector': [PASS, ['arch==arm', NO_VARIANTS]],
 
-  # TODO(jarin/mstarzinger): Investigate debugger issues with TurboFan.
-  'test-debug/DebugStepNatives': [PASS, NO_VARIANTS],
-  'test-debug/DebugStepFunctionApply': [PASS, NO_VARIANTS],
-  'test-debug/DebugStepFunctionCall': [PASS, NO_VARIANTS],
+  # TODO(mstarzinger): The rewriter is not being called when top-level code is
+  # optimized and hence scripts don't "return" the correct value. Fix this.
+  'test-compiler/CompileFunctionInContext*': [PASS, NO_VARIANTS],
 
-  # TODO(jochen): Reenable after we removed the CHECK() from the marking queue.
-  'test-mark-compact/MarkingDeque': [SKIP],
+  # TODO(mstarzinger): Crankshaft messes with debugger, investigate and fix!
+  'test-debug/BreakPointThroughJavaScript': [PASS, NO_VARIANTS],  # in no-snap mode.
+  'test-debug/ScriptBreakPointByIdThroughJavaScript': [PASS, NO_VARIANTS],
+  'test-debug/ScriptBreakPointByNameThroughJavaScript': [PASS, NO_VARIANTS],
 
   ############################################################################
   # Slow tests.
@@ -109,19 +127,21 @@
   'test-api/Threading3': [PASS, ['mode == debug', SLOW]],
   'test-api/Threading4': [PASS, ['mode == debug', SLOW]],
   'test-strings/StringOOM*': [PASS, ['mode == debug', SKIP]],
+
+  # TODO(machenbach, mvstanton): Flaky in debug on all platforms.
+  'test-lockers/LockerUnlocker': [PASS, ['mode == debug', FLAKY]],
 }],  # ALWAYS
 
 ##############################################################################
 ['arch == arm64', {
+
+  'test-cpu-profiler/CollectDeoptEvents': [PASS, FAIL],
 
   'test-api/Bug618': [PASS],
 
   # BUG(v8:3385).
   'test-serialize/DeserializeFromSecondSerialization': [PASS, FAIL],
   'test-serialize/DeserializeFromSecondSerializationAndRunScript2': [PASS, FAIL],
-
-  # BUG(v8:2999).
-  'test-cpu-profiler/CollectCpuProfile': [PASS, FAIL],
 
   # BUG(v8:3154).
   'test-heap/ReleaseOverReservedPages': [PASS, FAIL],
@@ -156,7 +176,6 @@
   'test-api/ExternalFloatArray': [SKIP],
   'test-api/Float32Array': [SKIP],
   'test-api/Float64Array': [SKIP],
-  'test-debug/DebugBreakLoop': [SKIP],
 }],  # 'arch == arm64 and mode == debug and simulator_run == True'
 
 ##############################################################################
@@ -164,6 +183,18 @@
   # Skip tests not suitable for ASAN.
   'test-assembler-x64/AssemblerX64XchglOperations': [SKIP],
 }],  # 'asan == True'
+
+##############################################################################
+['msan == True', {
+  # ICU upstream issues.
+  'test-strings/CountBreakIterator': [SKIP],
+
+  # Slow tests.
+  'test-api/Threading1': [PASS, SLOW],
+  'test-api/Threading2': [PASS, SLOW],
+  'test-api/Threading3': [PASS, SLOW],
+  'test-api/Threading4': [PASS, SLOW],
+}],  # 'msan == True'
 
 ##############################################################################
 ['no_snap == True', {
@@ -180,17 +211,8 @@
 ##############################################################################
 ['system == windows', {
 
-  # BUG(2999).
-  'test-cpu-profiler/CollectCpuProfile': [PASS, FAIL],
-
-  # BUG(3005).
-  'test-alloc/CodeRange': [PASS, FAIL],
-
   # BUG(3331). Fails on windows.
   'test-heap/NoWeakHashTableLeakWithIncrementalMarking': [SKIP],
-
-  # BUG(v8:3433). Crashes on windows.
-  'test-cpu-profiler/FunctionApplySample': [SKIP],
 
 }],  # 'system == windows'
 
@@ -205,6 +227,8 @@
 
 ##############################################################################
 ['arch == arm', {
+
+  'test-cpu-profiler/CollectDeoptEvents': [PASS, FAIL],
 
   # BUG(355): Test crashes on ARM.
   'test-log/ProfLazyMode': [SKIP],
@@ -229,20 +253,16 @@
 
 ##############################################################################
 ['arch == mipsel or arch == mips', {
+  'test-cpu-profiler/CollectDeoptEvents': [PASS, FAIL],
 
-  # BUG(2657): Test sometimes times out on MIPS simulator.
-  'test-thread-termination/TerminateMultipleV8ThreadsDefaultIsolate': [PASS, TIMEOUT],
+  # TODO(mips-team): Improve code-size on large RegExp's.
+  'test-heap/TestSizeOfRegExpCode':  [SKIP],
 
   # BUG(1075): Unresolved crashes on MIPS also.
   'test-serialize/Deserialize': [SKIP],
   'test-serialize/DeserializeFromSecondSerializationAndRunScript2': [SKIP],
   'test-serialize/DeserializeAndRunScript2': [SKIP],
   'test-serialize/DeserializeFromSecondSerialization': [SKIP],
-
-  # Test requires turbofan:
-  'test-simplified-lowering/LowerStringOps_to_call_and_compare': [SKIP],
-  'codegen-tester/CompareWrapper': [SKIP],
-  'codegen-tester/ParametersEqual': [SKIP],
 }],  # 'arch == mipsel or arch == mips'
 
 ##############################################################################
@@ -251,18 +271,13 @@
   'test-api/ExternalArrays': [PASS, NO_VARIANTS],
 
   # TODO(mips-team): Currently fails on mips board.
-  'test-simplified-lowering/RunNumberMultiply_TruncatingToUint32': [SKIP],
   'test-parsing/TooManyArguments': [SKIP],
   'test-api/Threading3': [SKIP],
-  'test-api/RequestInterruptTestWithNativeAccessor': [SKIP],
-  'test-api/RequestInterruptTestWithAccessor': [SKIP],
 }],  # 'arch == mips'
 
 ##############################################################################
-['arch == mips64el', {
-
-  # BUG(2657): Test sometimes times out on MIPS simulator.
-  'test-thread-termination/TerminateMultipleV8ThreadsDefaultIsolate': [PASS, TIMEOUT],
+['arch == mips64el or arch == mips64', {
+  'test-cpu-profiler/CollectDeoptEvents': [PASS, FAIL],
 
   # BUG(v8:3154).
   'test-heap/ReleaseOverReservedPages': [PASS, FAIL],
@@ -272,20 +287,11 @@
   'test-serialize/DeserializeFromSecondSerializationAndRunScript2': [SKIP],
   'test-serialize/DeserializeAndRunScript2': [SKIP],
   'test-serialize/DeserializeFromSecondSerialization': [SKIP],
-
-  # Test requires turbofan:
-  'test-simplified-lowering/LowerStringOps_to_call_and_compare': [SKIP],
-  'codegen-tester/CompareWrapper': [SKIP],
-  'codegen-tester/ParametersEqual': [SKIP],
-}],  # 'arch == mips64el'
+}],  # 'arch == mips64el or arch == mips64'
 
 ##############################################################################
 ['arch == x87', {
-
-  # Test requires turbofan:
-  'codegen-tester/CompareWrapper': [SKIP],
-  'codegen-tester/ParametersEqual': [SKIP],
-  'test-simplified-lowering/LowerStringOps_to_call_and_compare': [SKIP],
+  'test-run-machops/RunFloat64InsertLowWord32': [SKIP]
 }],  # 'arch == x87'
 
 ##############################################################################
@@ -402,8 +408,21 @@
 
 }],  # 'arch == nacl_ia32 or arch == nacl_x64'
 
-['arch == ppc64', {
-  #issue 2857
+##############################################################################
+['system == aix and arch == ppc64', {
+
+  # BUG 2857
   'test-log/EquivalenceOfLoggingAndTraversal' : [SKIP],
-}],  # 'arch == ppc64'
+
+}],  # 'system == aix and arch == ppc64'
+
+##############################################################################
+['arch == ppc and simulator_run == True or arch == ppc64 and simulator_run == True', {
+
+  # Pass but take too long with the simulator.
+  'test-api/Threading1': [PASS, SLOW],
+  'test-api/Threading2': [PASS, SLOW],
+  'test-api/ExternalArrays': [PASS, SLOW],
+
+}],  # 'arch == ppc64 and simulator_run == True'
 ]

@@ -32,7 +32,6 @@
 #include "src/base/platform/platform.h"
 #include "src/factory.h"
 #include "src/macro-assembler.h"
-#include "src/serialize.h"
 #include "test/cctest/cctest.h"
 
 namespace i = v8::internal;
@@ -98,21 +97,13 @@ typedef int (*F0)();
 
 static void EntryCode(MacroAssembler* masm) {
   // Smi constant register is callee save.
-  __ pushq(i::kSmiConstantRegister);
   __ pushq(i::kRootRegister);
-  __ InitializeSmiConstantRegister();
   __ InitializeRootRegister();
 }
 
 
 static void ExitCode(MacroAssembler* masm) {
-  // Return -1 if kSmiConstantRegister was clobbered during the test.
-  __ Move(rdx, Smi::FromInt(1));
-  __ cmpq(rdx, i::kSmiConstantRegister);
-  __ movq(rdx, Immediate(-1));
-  __ cmovq(not_equal, rax, rdx);
   __ popq(i::kRootRegister);
-  __ popq(i::kSmiConstantRegister);
 }
 
 
@@ -556,32 +547,6 @@ TEST(SmiCheck) {
   cond = masm->CheckNonNegativeSmi(rcx);  // "Positive" non-smi.
   __ j(cond, &exit);
 
-  // CheckIsMinSmi
-
-  __ incq(rax);
-  __ movq(rcx, Immediate(Smi::kMaxValue));
-  __ Integer32ToSmi(rcx, rcx);
-  cond = masm->CheckIsMinSmi(rcx);
-  __ j(cond, &exit);
-
-  __ incq(rax);
-  __ movq(rcx, Immediate(0));
-  __ Integer32ToSmi(rcx, rcx);
-  cond = masm->CheckIsMinSmi(rcx);
-  __ j(cond, &exit);
-
-  __ incq(rax);
-  __ movq(rcx, Immediate(Smi::kMinValue));
-  __ Integer32ToSmi(rcx, rcx);
-  cond = masm->CheckIsMinSmi(rcx);
-  __ j(NegateCondition(cond), &exit);
-
-  __ incq(rax);
-  __ movq(rcx, Immediate(Smi::kMinValue + 1));
-  __ Integer32ToSmi(rcx, rcx);
-  cond = masm->CheckIsMinSmi(rcx);
-  __ j(cond, &exit);
-
   // CheckBothSmi
 
   __ incq(rax);
@@ -771,28 +736,27 @@ static void SmiAddTest(MacroAssembler* masm,
   __ movl(rcx, Immediate(first));
   __ Integer32ToSmi(rcx, rcx);
 
-  i::SmiOperationExecutionMode mode;
-  mode.Add(i::PRESERVE_SOURCE_REGISTER);
-  mode.Add(i::BAILOUT_ON_OVERFLOW);
+  i::SmiOperationConstraints constraints =
+      i::SmiOperationConstraint::kPreserveSourceRegister |
+      i::SmiOperationConstraint::kBailoutOnOverflow;
   __ incq(rax);
-  __ SmiAddConstant(r9, rcx, Smi::FromInt(second), mode, exit);
+  __ SmiAddConstant(r9, rcx, Smi::FromInt(second), constraints, exit);
   __ cmpq(r9, r8);
   __ j(not_equal, exit);
 
   __ incq(rax);
-  __ SmiAddConstant(rcx, rcx, Smi::FromInt(second), mode, exit);
+  __ SmiAddConstant(rcx, rcx, Smi::FromInt(second), constraints, exit);
   __ cmpq(rcx, r8);
   __ j(not_equal, exit);
 
   __ movl(rcx, Immediate(first));
   __ Integer32ToSmi(rcx, rcx);
 
-  mode.RemoveAll();
-  mode.Add(i::PRESERVE_SOURCE_REGISTER);
-  mode.Add(i::BAILOUT_ON_NO_OVERFLOW);
+  constraints = i::SmiOperationConstraint::kPreserveSourceRegister |
+                i::SmiOperationConstraint::kBailoutOnNoOverflow;
   Label done;
   __ incq(rax);
-  __ SmiAddConstant(rcx, rcx, Smi::FromInt(second), mode, &done);
+  __ SmiAddConstant(rcx, rcx, Smi::FromInt(second), constraints, &done);
   __ jmp(exit);
   __ bind(&done);
   __ cmpq(rcx, r8);
@@ -834,14 +798,14 @@ static void SmiAddOverflowTest(MacroAssembler* masm,
     __ j(not_equal, exit);
   }
 
-  i::SmiOperationExecutionMode mode;
-  mode.Add(i::PRESERVE_SOURCE_REGISTER);
-  mode.Add(i::BAILOUT_ON_OVERFLOW);
+  i::SmiOperationConstraints constraints =
+      i::SmiOperationConstraint::kPreserveSourceRegister |
+      i::SmiOperationConstraint::kBailoutOnOverflow;
   __ movq(rcx, r11);
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiAddConstant(r9, rcx, Smi::FromInt(y_min), mode, &overflow_ok);
+    __ SmiAddConstant(r9, rcx, Smi::FromInt(y_min), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -852,7 +816,7 @@ static void SmiAddOverflowTest(MacroAssembler* masm,
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiAddConstant(rcx, rcx, Smi::FromInt(y_min), mode, &overflow_ok);
+    __ SmiAddConstant(rcx, rcx, Smi::FromInt(y_min), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -888,7 +852,7 @@ static void SmiAddOverflowTest(MacroAssembler* masm,
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiAddConstant(r9, rcx, Smi::FromInt(y_max), mode, &overflow_ok);
+    __ SmiAddConstant(r9, rcx, Smi::FromInt(y_max), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -896,12 +860,11 @@ static void SmiAddOverflowTest(MacroAssembler* masm,
     __ j(not_equal, exit);
   }
 
-  mode.RemoveAll();
-  mode.Add(i::BAILOUT_ON_OVERFLOW);
+  constraints = i::SmiOperationConstraint::kBailoutOnOverflow;
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiAddConstant(rcx, rcx, Smi::FromInt(y_max), mode, &overflow_ok);
+    __ SmiAddConstant(rcx, rcx, Smi::FromInt(y_max), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -987,28 +950,27 @@ static void SmiSubTest(MacroAssembler* masm,
   __ cmpq(rcx, r8);
   __ j(not_equal, exit);
 
-  i::SmiOperationExecutionMode mode;
-  mode.Add(i::PRESERVE_SOURCE_REGISTER);
-  mode.Add(i::BAILOUT_ON_OVERFLOW);
+  i::SmiOperationConstraints constraints =
+      i::SmiOperationConstraint::kPreserveSourceRegister |
+      i::SmiOperationConstraint::kBailoutOnOverflow;
   __ Move(rcx, Smi::FromInt(first));
   __ incq(rax);  // Test 4.
-  __ SmiSubConstant(rcx, rcx, Smi::FromInt(second), mode, exit);
+  __ SmiSubConstant(rcx, rcx, Smi::FromInt(second), constraints, exit);
   __ cmpq(rcx, r8);
   __ j(not_equal, exit);
 
   __ Move(rcx, Smi::FromInt(first));
   __ incq(rax);  // Test 5.
-  __ SmiSubConstant(r9, rcx, Smi::FromInt(second), mode, exit);
+  __ SmiSubConstant(r9, rcx, Smi::FromInt(second), constraints, exit);
   __ cmpq(r9, r8);
   __ j(not_equal, exit);
 
-  mode.RemoveAll();
-  mode.Add(i::PRESERVE_SOURCE_REGISTER);
-  mode.Add(i::BAILOUT_ON_NO_OVERFLOW);
+  constraints = i::SmiOperationConstraint::kPreserveSourceRegister |
+                i::SmiOperationConstraint::kBailoutOnNoOverflow;
   __ Move(rcx, Smi::FromInt(first));
   Label done;
   __ incq(rax);  // Test 6.
-  __ SmiSubConstant(rcx, rcx, Smi::FromInt(second), mode, &done);
+  __ SmiSubConstant(rcx, rcx, Smi::FromInt(second), constraints, &done);
   __ jmp(exit);
   __ bind(&done);
   __ cmpq(rcx, r8);
@@ -1050,15 +1012,15 @@ static void SmiSubOverflowTest(MacroAssembler* masm,
     __ j(not_equal, exit);
   }
 
-  i::SmiOperationExecutionMode mode;
-  mode.Add(i::PRESERVE_SOURCE_REGISTER);
-  mode.Add(i::BAILOUT_ON_OVERFLOW);
+  i::SmiOperationConstraints constraints =
+      i::SmiOperationConstraint::kPreserveSourceRegister |
+      i::SmiOperationConstraint::kBailoutOnOverflow;
 
   __ movq(rcx, r11);
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiSubConstant(r9, rcx, Smi::FromInt(y_min), mode, &overflow_ok);
+    __ SmiSubConstant(r9, rcx, Smi::FromInt(y_min), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -1069,7 +1031,7 @@ static void SmiSubOverflowTest(MacroAssembler* masm,
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiSubConstant(rcx, rcx, Smi::FromInt(y_min), mode, &overflow_ok);
+    __ SmiSubConstant(rcx, rcx, Smi::FromInt(y_min), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -1105,7 +1067,7 @@ static void SmiSubOverflowTest(MacroAssembler* masm,
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiSubConstant(rcx, rcx, Smi::FromInt(y_max), mode, &overflow_ok);
+    __ SmiSubConstant(rcx, rcx, Smi::FromInt(y_max), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);
@@ -1113,13 +1075,12 @@ static void SmiSubOverflowTest(MacroAssembler* masm,
     __ j(not_equal, exit);
   }
 
-  mode.RemoveAll();
-  mode.Add(i::BAILOUT_ON_OVERFLOW);
+  constraints = i::SmiOperationConstraint::kBailoutOnOverflow;
   __ movq(rcx, r11);
   {
     Label overflow_ok;
     __ incq(rax);
-    __ SmiSubConstant(rcx, rcx, Smi::FromInt(y_max), mode, &overflow_ok);
+    __ SmiSubConstant(rcx, rcx, Smi::FromInt(y_max), constraints, &overflow_ok);
     __ jmp(exit);
     __ bind(&overflow_ok);
     __ incq(rax);

@@ -27,9 +27,9 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
  public:
   ~TLSWrap() override;
 
-  static void Initialize(v8::Handle<v8::Object> target,
-                         v8::Handle<v8::Value> unused,
-                         v8::Handle<v8::Context> context);
+  static void Initialize(v8::Local<v8::Object> target,
+                         v8::Local<v8::Value> unused,
+                         v8::Local<v8::Context> context);
 
   void* Cast() override;
   int GetFD() override;
@@ -53,7 +53,7 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
   size_t self_size() const override { return sizeof(*this); }
 
  protected:
-  static const int kClearOutChunkSize = 1024;
+  static const int kClearOutChunkSize = 16384;
 
   // Maximum number of bytes for hello parser
   static const int kMaxHelloLength = 16384;

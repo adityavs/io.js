@@ -79,6 +79,15 @@ code a:hover {
   color: white !important;
 }
 
+.api_stability_0 a,
+.api_stability_1 a,
+.api_stability_2 a,
+.api_stability_3 a,
+.api_stability_4 a,
+.api_stability_5 a {
+  text-decoration: underline;
+}
+
 .api_stability_0 {
   background-color: #D60027;
 }
@@ -330,6 +339,12 @@ p code,
 li code {
   font-size: 0.9em;
   color: #040404;
+  background-color: #f2f5f0;
+  padding: 0.2em 0.4em;
+}
+
+a code {
+  color: inherit;
 }
 
 span.type {
@@ -345,7 +360,7 @@ span.type {
 
 #column1.interior {
   width: 702px;
-  border-left: 13em solid #f2f5f0;
+  border-left: 234px solid #f2f5f0;
   padding-left: 2.0em;
 }
 

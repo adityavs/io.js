@@ -9,43 +9,24 @@
 #include "src/ostreams.h"
 #include "src/parser.h"  // for CompileTimeValue; TODO(rossberg): should move
 #include "src/scopes.h"
+#include "src/splay-tree-inl.h"
 
 namespace v8 {
 namespace internal {
 
 
-AstTyper::AstTyper(CompilationInfo* info)
-    : info_(info),
-      oracle_(info->isolate(), info->zone(),
-              handle(info->closure()->shared()->code()),
-              handle(info->closure()->shared()->feedback_vector()),
-              handle(info->closure()->context()->native_context())),
-      store_(info->zone()) {
-  InitializeAstVisitor(info->isolate(), info->zone());
+AstTyper::AstTyper(Isolate* isolate, Zone* zone, Handle<JSFunction> closure,
+                   Scope* scope, BailoutId osr_ast_id, FunctionLiteral* root)
+    : closure_(closure),
+      scope_(scope),
+      osr_ast_id_(osr_ast_id),
+      root_(root),
+      oracle_(isolate, zone, handle(closure->shared()->code()),
+              handle(closure->shared()->feedback_vector()),
+              handle(closure->context()->native_context())),
+      store_(zone) {
+  InitializeAstVisitor(isolate, zone);
 }
-
-
-#define RECURSE(call)                         \
-  do {                                        \
-    DCHECK(!visitor->HasStackOverflow());     \
-    call;                                     \
-    if (visitor->HasStackOverflow()) return;  \
-  } while (false)
-
-void AstTyper::Run(CompilationInfo* info) {
-  AstTyper* visitor = new(info->zone()) AstTyper(info);
-  Scope* scope = info->scope();
-
-  // Handle implicit declaration of the function name in named function
-  // expressions before other declarations.
-  if (scope->is_function_scope() && scope->function() != NULL) {
-    RECURSE(visitor->VisitVariableDeclaration(scope->function()));
-  }
-  RECURSE(visitor->VisitDeclarations(scope->declarations()));
-  RECURSE(visitor->VisitStatements(info->function()->body()));
-}
-
-#undef RECURSE
 
 
 #ifdef OBJECT_PRINT
@@ -67,18 +48,17 @@ Effect AstTyper::ObservedOnStack(Object* value) {
 
 
 void AstTyper::ObserveTypesAtOsrEntry(IterationStatement* stmt) {
-  if (stmt->OsrEntryId() != info_->osr_ast_id()) return;
+  if (stmt->OsrEntryId() != osr_ast_id_) return;
 
   DisallowHeapAllocation no_gc;
   JavaScriptFrameIterator it(isolate());
   JavaScriptFrame* frame = it.frame();
-  Scope* scope = info_->scope();
 
   // Assert that the frame on the stack belongs to the function we want to OSR.
-  DCHECK_EQ(*info_->closure(), frame->function());
+  DCHECK_EQ(*closure_, frame->function());
 
-  int params = scope->num_parameters();
-  int locals = scope->StackLocalCount();
+  int params = scope_->num_parameters();
+  int locals = scope_->StackLocalCount();
 
   // Use sequential composition to achieve desired narrowing.
   // The receiver is a parameter with index -1.
@@ -93,19 +73,19 @@ void AstTyper::ObserveTypesAtOsrEntry(IterationStatement* stmt) {
 
 #ifdef OBJECT_PRINT
   if (FLAG_trace_osr && FLAG_print_scopes) {
-    PrintObserved(scope->receiver(),
-                  frame->receiver(),
+    PrintObserved(scope_->receiver(), frame->receiver(),
                   store_.LookupBounds(parameter_index(-1)).lower);
 
     for (int i = 0; i < params; i++) {
-      PrintObserved(scope->parameter(i),
-                    frame->GetParameter(i),
+      PrintObserved(scope_->parameter(i), frame->GetParameter(i),
                     store_.LookupBounds(parameter_index(i)).lower);
     }
 
     ZoneList<Variable*> local_vars(locals, zone());
-    ZoneList<Variable*> context_vars(scope->ContextLocalCount(), zone());
-    scope->CollectStackAndContextLocals(&local_vars, &context_vars);
+    ZoneList<Variable*> context_vars(scope_->ContextLocalCount(), zone());
+    ZoneList<Variable*> global_vars(scope_->ContextGlobalCount(), zone());
+    scope_->CollectStackAndContextLocals(&local_vars, &context_vars,
+                                         &global_vars);
     for (int i = 0; i < locals; i++) {
       PrintObserved(local_vars.at(i),
                     frame->GetExpression(i),
@@ -122,6 +102,12 @@ void AstTyper::ObserveTypesAtOsrEntry(IterationStatement* stmt) {
     call;                            \
     if (HasStackOverflow()) return;  \
   } while (false)
+
+
+void AstTyper::Run() {
+  RECURSE(VisitDeclarations(scope_->declarations()));
+  RECURSE(VisitStatements(root_->body()));
+}
 
 
 void AstTyper::VisitStatements(ZoneList<Statement*>* stmts) {
@@ -147,6 +133,12 @@ void AstTyper::VisitExpressionStatement(ExpressionStatement* stmt) {
 
 
 void AstTyper::VisitEmptyStatement(EmptyStatement* stmt) {
+}
+
+
+void AstTyper::VisitSloppyBlockFunctionStatement(
+    SloppyBlockFunctionStatement* stmt) {
+  Visit(stmt->statement());
 }
 
 
@@ -346,9 +338,7 @@ void AstTyper::VisitDebuggerStatement(DebuggerStatement* stmt) {
 }
 
 
-void AstTyper::VisitFunctionLiteral(FunctionLiteral* expr) {
-  expr->InitializeSharedInfo(Handle<Code>(info_->closure()->shared()->code()));
-}
+void AstTyper::VisitFunctionLiteral(FunctionLiteral* expr) {}
 
 
 void AstTyper::VisitClassLiteral(ClassLiteral* expr) {}
@@ -410,7 +400,17 @@ void AstTyper::VisitObjectLiteral(ObjectLiteral* expr) {
       if (!prop->is_computed_name() &&
           prop->key()->AsLiteral()->value()->IsInternalizedString() &&
           prop->emit_store()) {
-        prop->RecordTypeFeedback(oracle());
+        // Record type feed back for the property.
+        TypeFeedbackId id = prop->key()->AsLiteral()->LiteralFeedbackId();
+        FeedbackVectorICSlot slot = prop->GetSlot();
+        SmallMapList maps;
+        if (FLAG_vector_stores) {
+          oracle()->CollectReceiverTypes(slot, &maps);
+        } else {
+          oracle()->CollectReceiverTypes(id, &maps);
+        }
+        prop->set_receiver_type(maps.length() == 1 ? maps.at(0)
+                                                   : Handle<Map>::null());
       }
     }
 
@@ -428,7 +428,7 @@ void AstTyper::VisitArrayLiteral(ArrayLiteral* expr) {
     RECURSE(Visit(value));
   }
 
-  NarrowType(expr, Bounds(Type::Array(zone())));
+  NarrowType(expr, Bounds(Type::Object(zone())));
 }
 
 
@@ -437,18 +437,31 @@ void AstTyper::VisitAssignment(Assignment* expr) {
   Property* prop = expr->target()->AsProperty();
   if (prop != NULL) {
     TypeFeedbackId id = expr->AssignmentFeedbackId();
-    expr->set_is_uninitialized(oracle()->StoreIsUninitialized(id));
+    FeedbackVectorICSlot slot = expr->AssignmentSlot();
+    expr->set_is_uninitialized(FLAG_vector_stores
+                                   ? oracle()->StoreIsUninitialized(slot)
+                                   : oracle()->StoreIsUninitialized(id));
     if (!expr->IsUninitialized()) {
+      SmallMapList* receiver_types = expr->GetReceiverTypes();
       if (prop->key()->IsPropertyName()) {
         Literal* lit_key = prop->key()->AsLiteral();
         DCHECK(lit_key != NULL && lit_key->value()->IsString());
         Handle<String> name = Handle<String>::cast(lit_key->value());
-        oracle()->AssignmentReceiverTypes(id, name, expr->GetReceiverTypes());
+        if (FLAG_vector_stores) {
+          oracle()->AssignmentReceiverTypes(slot, name, receiver_types);
+        } else {
+          oracle()->AssignmentReceiverTypes(id, name, receiver_types);
+        }
       } else {
         KeyedAccessStoreMode store_mode;
         IcCheckType key_type;
-        oracle()->KeyedAssignmentReceiverTypes(id, expr->GetReceiverTypes(),
-                                               &store_mode, &key_type);
+        if (FLAG_vector_stores) {
+          oracle()->KeyedAssignmentReceiverTypes(slot, receiver_types,
+                                                 &store_mode, &key_type);
+        } else {
+          oracle()->KeyedAssignmentReceiverTypes(id, receiver_types,
+                                                 &store_mode, &key_type);
+        }
         expr->set_store_mode(store_mode);
         expr->set_key_type(key_type);
       }
@@ -487,35 +500,20 @@ void AstTyper::VisitThrow(Throw* expr) {
 void AstTyper::VisitProperty(Property* expr) {
   // Collect type feedback.
   FeedbackVectorICSlot slot(FeedbackVectorICSlot::Invalid());
-  TypeFeedbackId id(TypeFeedbackId::None());
-  if (FLAG_vector_ics) {
-    slot = expr->PropertyFeedbackSlot();
-    expr->set_is_uninitialized(oracle()->LoadIsUninitialized(slot));
-  } else {
-    id = expr->PropertyFeedbackId();
-    expr->set_is_uninitialized(oracle()->LoadIsUninitialized(id));
-  }
+  slot = expr->PropertyFeedbackSlot();
+  expr->set_inline_cache_state(oracle()->LoadInlineCacheState(slot));
 
   if (!expr->IsUninitialized()) {
     if (expr->key()->IsPropertyName()) {
       Literal* lit_key = expr->key()->AsLiteral();
       DCHECK(lit_key != NULL && lit_key->value()->IsString());
       Handle<String> name = Handle<String>::cast(lit_key->value());
-      if (FLAG_vector_ics) {
-        oracle()->PropertyReceiverTypes(slot, name, expr->GetReceiverTypes());
-      } else {
-        oracle()->PropertyReceiverTypes(id, name, expr->GetReceiverTypes());
-      }
+      oracle()->PropertyReceiverTypes(slot, name, expr->GetReceiverTypes());
     } else {
       bool is_string;
       IcCheckType key_type;
-      if (FLAG_vector_ics) {
-        oracle()->KeyedPropertyReceiverTypes(slot, expr->GetReceiverTypes(),
-                                             &is_string, &key_type);
-      } else {
-        oracle()->KeyedPropertyReceiverTypes(id, expr->GetReceiverTypes(),
-                                             &is_string, &key_type);
-      }
+      oracle()->KeyedPropertyReceiverTypes(slot, expr->GetReceiverTypes(),
+                                           &is_string, &key_type);
       expr->set_is_string_access(is_string);
       expr->set_key_type(key_type);
     }
@@ -562,7 +560,16 @@ void AstTyper::VisitCall(Call* expr) {
 
 void AstTyper::VisitCallNew(CallNew* expr) {
   // Collect type feedback.
-  expr->RecordTypeFeedback(oracle());
+  FeedbackVectorSlot allocation_site_feedback_slot =
+      expr->CallNewFeedbackSlot();
+  expr->set_allocation_site(
+      oracle()->GetCallNewAllocationSite(allocation_site_feedback_slot));
+  bool monomorphic =
+      oracle()->CallNewIsMonomorphic(expr->CallNewFeedbackSlot());
+  expr->set_is_monomorphic(monomorphic);
+  if (monomorphic) {
+    expr->set_target(oracle()->GetCallNewTarget(expr->CallNewFeedbackSlot()));
+  }
 
   RECURSE(Visit(expr->expression()));
   ZoneList<Expression*>* args = expr->arguments();
@@ -615,12 +622,18 @@ void AstTyper::VisitUnaryOperation(UnaryOperation* expr) {
 void AstTyper::VisitCountOperation(CountOperation* expr) {
   // Collect type feedback.
   TypeFeedbackId store_id = expr->CountStoreFeedbackId();
+  FeedbackVectorICSlot slot = expr->CountSlot();
   KeyedAccessStoreMode store_mode;
   IcCheckType key_type;
-  oracle()->GetStoreModeAndKeyType(store_id, &store_mode, &key_type);
+  if (FLAG_vector_stores) {
+    oracle()->GetStoreModeAndKeyType(slot, &store_mode, &key_type);
+    oracle()->CountReceiverTypes(slot, expr->GetReceiverTypes());
+  } else {
+    oracle()->GetStoreModeAndKeyType(store_id, &store_mode, &key_type);
+    oracle()->CountReceiverTypes(store_id, expr->GetReceiverTypes());
+  }
   expr->set_store_mode(store_mode);
   expr->set_key_type(key_type);
-  oracle()->CountReceiverTypes(store_id, expr->GetReceiverTypes());
   expr->set_type(oracle()->CountType(expr->CountBinOpFeedbackId()));
   // TODO(rossberg): merge the count type with the generic expression type.
 
@@ -640,7 +653,7 @@ void AstTyper::VisitBinaryOperation(BinaryOperation* expr) {
   Type* type;
   Type* left_type;
   Type* right_type;
-  Maybe<int> fixed_right_arg;
+  Maybe<int> fixed_right_arg = Nothing<int>();
   Handle<AllocationSite> allocation_site;
   oracle()->BinaryType(expr->BinaryOperationFeedbackId(),
       &left_type, &right_type, &type, &fixed_right_arg,
@@ -754,11 +767,22 @@ void AstTyper::VisitCompareOperation(CompareOperation* expr) {
 }
 
 
+void AstTyper::VisitSpread(Spread* expr) { RECURSE(Visit(expr->expression())); }
+
+
+void AstTyper::VisitEmptyParentheses(EmptyParentheses* expr) {
+  UNREACHABLE();
+}
+
+
 void AstTyper::VisitThisFunction(ThisFunction* expr) {
 }
 
 
-void AstTyper::VisitSuperReference(SuperReference* expr) {}
+void AstTyper::VisitSuperPropertyReference(SuperPropertyReference* expr) {}
+
+
+void AstTyper::VisitSuperCallReference(SuperCallReference* expr) {}
 
 
 void AstTyper::VisitDeclarations(ZoneList<Declaration*>* decls) {
@@ -778,13 +802,7 @@ void AstTyper::VisitFunctionDeclaration(FunctionDeclaration* declaration) {
 }
 
 
-void AstTyper::VisitModuleDeclaration(ModuleDeclaration* declaration) {
-  RECURSE(Visit(declaration->module()));
-}
-
-
 void AstTyper::VisitImportDeclaration(ImportDeclaration* declaration) {
-  RECURSE(Visit(declaration->module()));
 }
 
 
@@ -792,23 +810,5 @@ void AstTyper::VisitExportDeclaration(ExportDeclaration* declaration) {
 }
 
 
-void AstTyper::VisitModuleLiteral(ModuleLiteral* module) {
-  RECURSE(Visit(module->body()));
-}
-
-
-void AstTyper::VisitModulePath(ModulePath* module) {
-  RECURSE(Visit(module->module()));
-}
-
-
-void AstTyper::VisitModuleUrl(ModuleUrl* module) {
-}
-
-
-void AstTyper::VisitModuleStatement(ModuleStatement* stmt) {
-  RECURSE(Visit(stmt->body()));
-}
-
-
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

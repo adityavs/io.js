@@ -6,7 +6,6 @@
 
 #include "src/base/utils/random-number-generator.h"
 #include "src/codegen.h"
-#include "src/compiler/graph-inl.h"
 #include "src/compiler/js-graph.h"
 #include "src/compiler/machine-operator-reducer.h"
 #include "src/compiler/operator-properties.h"
@@ -61,7 +60,7 @@ class ReducerTester : public HandleAndZoneScope {
         common(main_zone()),
         graph(main_zone()),
         javascript(main_zone()),
-        typer(isolate, &graph, MaybeHandle<Context>()),
+        typer(isolate, &graph),
         jsgraph(isolate, &graph, &common, &javascript, &machine),
         maxuint32(Constant<int32_t>(kMaxUInt32)) {
     Node* s = graph.NewNode(common.Start(num_parameters));
@@ -704,7 +703,8 @@ TEST(ReduceLoadStore) {
 
   Node* base = R.Constant<int32_t>(11);
   Node* index = R.Constant<int32_t>(4);
-  Node* load = R.graph.NewNode(R.machine.Load(kMachInt32), base, index);
+  Node* load = R.graph.NewNode(R.machine.Load(kMachInt32), base, index,
+                               R.graph.start(), R.graph.start());
 
   {
     MachineOperatorReducer reducer(&R.jsgraph);
@@ -715,7 +715,7 @@ TEST(ReduceLoadStore) {
   {
     Node* store = R.graph.NewNode(
         R.machine.Store(StoreRepresentation(kMachInt32, kNoWriteBarrier)), base,
-        index, load);
+        index, load, load, R.graph.start());
     MachineOperatorReducer reducer(&R.jsgraph);
     Reduction reduction = reducer.Reduce(store);
     CHECK(!reduction.Changed());  // stores should not be reduced.

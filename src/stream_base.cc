@@ -19,7 +19,6 @@ namespace node {
 using v8::Array;
 using v8::Context;
 using v8::FunctionCallbackInfo;
-using v8::Handle;
 using v8::HandleScope;
 using v8::Integer;
 using v8::Local;
@@ -72,7 +71,6 @@ void StreamBase::AfterShutdown(ShutdownWrap* req_wrap, int status) {
 
   // The wrap and request objects should still be there.
   CHECK_EQ(req_wrap->persistent().IsEmpty(), false);
-  CHECK_EQ(wrap->GetAsyncWrap()->persistent().IsEmpty(), false);
 
   HandleScope handle_scope(env->isolate());
   Context::Scope context_scope(env->context());
@@ -80,7 +78,7 @@ void StreamBase::AfterShutdown(ShutdownWrap* req_wrap, int status) {
   Local<Object> req_wrap_obj = req_wrap->object();
   Local<Value> argv[3] = {
     Integer::New(env->isolate(), status),
-    wrap->GetAsyncWrap()->object(),
+    wrap->GetObject(),
     req_wrap_obj
   };
 
@@ -110,14 +108,14 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
   for (size_t i = 0; i < count; i++) {
     storage_size = ROUND_UP(storage_size, WriteWrap::kAlignSize);
 
-    Handle<Value> chunk = chunks->Get(i * 2);
+    Local<Value> chunk = chunks->Get(i * 2);
 
     if (Buffer::HasInstance(chunk))
       continue;
       // Buffer chunk, no additional storage required
 
     // String chunk
-    Handle<String> string = chunk->ToString(env->isolate());
+    Local<String> string = chunk->ToString(env->isolate());
     enum encoding encoding = ParseEncoding(env->isolate(),
                                            chunks->Get(i * 2 + 1));
     size_t chunk_size;
@@ -144,7 +142,7 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
   uint32_t bytes = 0;
   size_t offset = 0;
   for (size_t i = 0; i < count; i++) {
-    Handle<Value> chunk = chunks->Get(i * 2);
+    Local<Value> chunk = chunks->Get(i * 2);
 
     // Write buffer
     if (Buffer::HasInstance(chunk)) {
@@ -156,11 +154,11 @@ int StreamBase::Writev(const FunctionCallbackInfo<Value>& args) {
 
     // Write string
     offset = ROUND_UP(offset, WriteWrap::kAlignSize);
-    CHECK_LT(offset, storage_size);
+    CHECK_LE(offset, storage_size);
     char* str_storage = req_wrap->Extra(offset);
     size_t str_size = storage_size - offset;
 
-    Handle<String> string = chunk->ToString(env->isolate());
+    Local<String> string = chunk->ToString(env->isolate());
     enum encoding encoding = ParseEncoding(env->isolate(),
                                            chunks->Get(i * 2 + 1));
     str_size = StringBytes::Write(env->isolate(),
@@ -370,7 +368,6 @@ void StreamBase::AfterWrite(WriteWrap* req_wrap, int status) {
 
   // The wrap and request objects should still be there.
   CHECK_EQ(req_wrap->persistent().IsEmpty(), false);
-  CHECK_EQ(wrap->GetAsyncWrap()->persistent().IsEmpty(), false);
 
   // Unref handle property
   Local<Object> req_wrap_obj = req_wrap->object();
@@ -379,7 +376,7 @@ void StreamBase::AfterWrite(WriteWrap* req_wrap, int status) {
 
   Local<Value> argv[] = {
     Integer::New(env->isolate(), status),
-    wrap->GetAsyncWrap()->object(),
+    wrap->GetObject(),
     req_wrap_obj,
     Undefined(env->isolate())
   };
@@ -414,7 +411,16 @@ void StreamBase::EmitData(ssize_t nread,
   if (argv[2].IsEmpty())
     argv[2] = Undefined(env->isolate());
 
-  GetAsyncWrap()->MakeCallback(env->onread_string(), ARRAY_SIZE(argv), argv);
+  AsyncWrap* async = GetAsyncWrap();
+  if (async == nullptr) {
+    node::MakeCallback(env,
+                       GetObject(),
+                       env->onread_string(),
+                       ARRAY_SIZE(argv),
+                       argv);
+  } else {
+    async->MakeCallback(env->onread_string(), ARRAY_SIZE(argv), argv);
+  }
 }
 
 
@@ -425,6 +431,16 @@ bool StreamBase::IsIPCPipe() {
 
 int StreamBase::GetFD() {
   return -1;
+}
+
+
+AsyncWrap* StreamBase::GetAsyncWrap() {
+  return nullptr;
+}
+
+
+Local<Object> StreamBase::GetObject() {
+  return GetAsyncWrap()->object();
 }
 
 

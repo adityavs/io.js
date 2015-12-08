@@ -62,6 +62,11 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   // Save callee save registers.
   __ MultiPush(kCalleeSaved | ra.bit());
 
+  // Save callee-saved FPU registers.
+  __ MultiPushFPU(kCalleeSavedFPU);
+  // Set up the reserved register for 0.0.
+  __ Move(kDoubleRegZero, 0.0);
+
   // For softfp, move the input value into f12.
   if (IsMipsSoftFloatABI) {
     __ Move(f12, a0, a1);
@@ -74,7 +79,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   // Save registers make sure they don't get clobbered.
   int source_reg_offset = kDoubleSize;
   int reg_num = 2;
-  for (;reg_num < Register::NumAllocatableRegisters(); ++reg_num) {
+  for (; reg_num < Register::NumAllocatableRegisters(); ++reg_num) {
     Register reg = Register::from_code(reg_num);
     if (!reg.is(destination_reg)) {
       __ push(reg);
@@ -117,6 +122,9 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   __ Branch(&ok, eq, v0, Operand(zero_reg));
   __ bind(&ok);
 
+  // Restore callee-saved FPU registers.
+  __ MultiPopFPU(kCalleeSavedFPU);
+
   // Restore callee save registers.
   __ MultiPop(kCalleeSaved | ra.bit());
 
@@ -144,7 +152,8 @@ int32_t RunGeneratedCodeCallWrapper(ConvertDToIFunc func,
                                     double from) {
 #ifdef USE_SIMULATOR
   Simulator::current(Isolate::Current())->CallFP(FUNCTION_ADDR(func), from, 0.);
-  return Simulator::current(Isolate::Current())->get_register(v0.code());
+  return static_cast<int32_t>(
+      Simulator::current(Isolate::Current())->get_register(v0.code()));
 #else
   return (*func)(from);
 #endif

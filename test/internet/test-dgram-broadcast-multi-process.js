@@ -7,7 +7,7 @@ var common = require('../common'),
     Buffer = require('buffer').Buffer,
     fork = require('child_process').fork,
     LOCAL_BROADCAST_HOST = '255.255.255.255',
-    TIMEOUT = 5000,
+    TIMEOUT = common.platformTimeout(5000),
     messages = [
       new Buffer('First message to send'),
       new Buffer('Second message to send'),
@@ -15,10 +15,15 @@ var common = require('../common'),
       new Buffer('Fourth message to send')
     ];
 
+if (common.inFreeBSDJail) {
+  console.log('1..0 # Skipped: in a FreeBSD jail');
+  return;
+}
+
 // take the first non-internal interface as the address for binding
 get_bindAddress: for (var name in networkInterfaces) {
   var interfaces = networkInterfaces[name];
-  for(var i = 0; i < interfaces.length; i++) {
+  for (var i = 0; i < interfaces.length; i++) {
     var localInterface = interfaces[i];
     if (!localInterface.internal && localInterface.family === 'IPv4') {
       var bindAddress = localInterface.address;

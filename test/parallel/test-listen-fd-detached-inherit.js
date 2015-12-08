@@ -6,7 +6,7 @@ var net = require('net');
 var PORT = common.PORT;
 var spawn = require('child_process').spawn;
 
-if (process.platform === 'win32') {
+if (common.isWindows) {
   console.log('1..0 # Skipped: This test is disabled on windows.');
   return;
 }
@@ -64,8 +64,8 @@ function test() {
 // Then output the child's pid, and immediately exit.
 function parent() {
   var server = net.createServer(function(conn) {
-    throw new Error('Should not see connections on parent');
     conn.end('HTTP/1.1 403 Forbidden\r\n\r\nI got problems.\r\n');
+    throw new Error('Should not see connections on parent');
   }).listen(PORT, function() {
     console.error('server listening on %d', PORT);
 

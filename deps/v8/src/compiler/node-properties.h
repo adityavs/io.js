@@ -12,10 +12,12 @@ namespace v8 {
 namespace internal {
 namespace compiler {
 
+class Graph;
 class Operator;
+class CommonOperatorBuilder;
 
 // A facade that simplifies access to the different kinds of inputs to a node.
-class NodeProperties FINAL {
+class NodeProperties final {
  public:
   // ---------------------------------------------------------------------------
   // Input layout.
@@ -39,7 +41,7 @@ class NodeProperties FINAL {
 
   static Node* GetValueInput(Node* node, int index);
   static Node* GetContextInput(Node* node);
-  static Node* GetFrameStateInput(Node* node);
+  static Node* GetFrameStateInput(Node* node, int index);
   static Node* GetEffectInput(Node* node, int index = 0);
   static Node* GetControlInput(Node* node, int index = 0);
 
@@ -70,6 +72,7 @@ class NodeProperties FINAL {
     return IrOpcode::IsPhiOpcode(node->opcode());
   }
 
+  static bool IsExceptionalCall(Node* node);
 
   // ---------------------------------------------------------------------------
   // Miscellaneous mutators.
@@ -77,13 +80,23 @@ class NodeProperties FINAL {
   static void ReplaceContextInput(Node* node, Node* context);
   static void ReplaceControlInput(Node* node, Node* control);
   static void ReplaceEffectInput(Node* node, Node* effect, int index = 0);
-  static void ReplaceFrameStateInput(Node* node, Node* frame_state);
+  static void ReplaceFrameStateInput(Node* node, int index, Node* frame_state);
   static void RemoveNonValueInputs(Node* node);
 
-  // Replace value uses of {node} with {value} and effect uses of {node} with
-  // {effect}. If {effect == NULL}, then use the effect input to {node}.
-  static void ReplaceWithValue(Node* node, Node* value, Node* effect = nullptr);
+  // Merge the control node {node} into the end of the graph, introducing a
+  // merge node or expanding an existing merge node if necessary.
+  static void MergeControlToEnd(Graph* graph, CommonOperatorBuilder* common,
+                                Node* node);
 
+  // Replace all uses of {node} with the given replacement nodes. All occurring
+  // use kinds need to be replaced, {NULL} is only valid if a use kind is
+  // guaranteed not to exist.
+  static void ReplaceUses(Node* node, Node* value, Node* effect = nullptr,
+                          Node* success = nullptr, Node* exception = nullptr);
+
+  // Safe wrapper to mutate the operator of a node. Checks that the node is
+  // currently in a state that satisfies constraints of the new operator.
+  static void ChangeOp(Node* node, const Operator* new_op);
 
   // ---------------------------------------------------------------------------
   // Miscellaneous utilities.
@@ -91,30 +104,25 @@ class NodeProperties FINAL {
   static Node* FindProjection(Node* node, size_t projection_index);
 
   // Collect the branch-related projections from a node, such as IfTrue,
-  // IfFalse, IfValue and IfDefault.
+  // IfFalse, IfSuccess, IfException, IfValue and IfDefault.
   //  - Branch: [ IfTrue, IfFalse ]
+  //  - Call  : [ IfSuccess, IfException ]
   //  - Switch: [ IfValue, ..., IfDefault ]
   static void CollectControlProjections(Node* node, Node** proj, size_t count);
 
-
   // ---------------------------------------------------------------------------
-  // Type Bounds.
+  // Type.
 
-  static bool IsTyped(Node* node) {
-    Bounds const bounds = node->bounds();
-    DCHECK(!bounds.lower == !bounds.upper);
-    return bounds.upper;
-  }
-  static Bounds GetBounds(Node* node) {
+  static bool IsTyped(Node* node) { return node->type() != nullptr; }
+  static Type* GetType(Node* node) {
     DCHECK(IsTyped(node));
-    return node->bounds();
+    return node->type();
   }
-  static void SetBounds(Node* node, Bounds bounds) {
-    DCHECK_NOT_NULL(bounds.lower);
-    DCHECK_NOT_NULL(bounds.upper);
-    node->set_bounds(bounds);
+  static void SetType(Node* node, Type* type) {
+    DCHECK_NOT_NULL(type);
+    node->set_type(type);
   }
-  static void RemoveBounds(Node* node) { node->set_bounds(Bounds()); }
+  static void RemoveType(Node* node) { node->set_type(nullptr); }
   static bool AllValueInputsAreTyped(Node* node);
 
  private:

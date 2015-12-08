@@ -8,11 +8,23 @@
 #include "src/compiler/instruction.h"
 #include "src/compiler/instruction-selector.h"
 #include "src/compiler/linkage.h"
+#include "src/compiler/schedule.h"
 #include "src/macro-assembler.h"
 
 namespace v8 {
 namespace internal {
 namespace compiler {
+
+// Helper struct containing data about a table or lookup switch.
+struct SwitchInfo {
+  int32_t min_value;           // minimum value of {case_values}
+  int32_t max_value;           // maximum value of {case_values}
+  size_t value_range;          // |max_value - min_value| + 1
+  size_t case_count;           // number of cases
+  int32_t* case_values;        // actual case values, unsorted
+  BasicBlock** case_branches;  // basic blocks corresponding to case values
+  BasicBlock* default_branch;  // default branch target
+};
 
 // A helper class for the instruction selector that simplifies construction of
 // Operands. This class implements a base for architecture-specific helpers.
@@ -74,6 +86,11 @@ class OperandGenerator {
                                         GetVReg(node)));
   }
 
+  InstructionOperand UseUniqueSlot(Node* node) {
+    return Use(node, UnallocatedOperand(UnallocatedOperand::MUST_HAVE_SLOT,
+                                        GetVReg(node)));
+  }
+
   // Use register or operand for the node. If a register is chosen, it won't
   // alias any temporary or output registers.
   InstructionOperand UseUnique(Node* node) {
@@ -102,8 +119,7 @@ class OperandGenerator {
   }
 
   InstructionOperand UseImmediate(Node* node) {
-    int index = sequence()->AddImmediate(ToConstant(node));
-    return ImmediateOperand(index);
+    return sequence()->AddImmediate(ToConstant(node));
   }
 
   InstructionOperand UseLocation(Node* node, LinkageLocation location,
@@ -121,7 +137,7 @@ class OperandGenerator {
     UnallocatedOperand op = UnallocatedOperand(
         UnallocatedOperand::MUST_HAVE_REGISTER,
         UnallocatedOperand::USED_AT_START, sequence()->NextVirtualRegister());
-    sequence()->MarkAsDouble(op.virtual_register());
+    sequence()->MarkAsRepresentation(kRepFloat64, op.virtual_register());
     return op;
   }
 
@@ -132,8 +148,7 @@ class OperandGenerator {
   }
 
   InstructionOperand TempImmediate(int32_t imm) {
-    int index = sequence()->AddImmediate(Constant(imm));
-    return ImmediateOperand(index);
+    return sequence()->AddImmediate(Constant(imm));
   }
 
   InstructionOperand TempLocation(LinkageLocation location, MachineType type) {
@@ -142,8 +157,8 @@ class OperandGenerator {
   }
 
   InstructionOperand Label(BasicBlock* block) {
-    int index = sequence()->AddImmediate(Constant(block->GetRpoNumber()));
-    return ImmediateOperand(index);
+    return sequence()->AddImmediate(
+        Constant(RpoNumber::FromInt(block->rpo_number())));
   }
 
  protected:
@@ -168,7 +183,7 @@ class OperandGenerator {
       case IrOpcode::kExternalConstant:
         return Constant(OpParameter<ExternalReference>(node));
       case IrOpcode::kHeapConstant:
-        return Constant(OpParameter<Unique<HeapObject> >(node).handle());
+        return Constant(OpParameter<Handle<HeapObject>>(node));
       default:
         break;
     }
@@ -193,30 +208,29 @@ class OperandGenerator {
   UnallocatedOperand ToUnallocatedOperand(LinkageLocation location,
                                           MachineType type,
                                           int virtual_register) {
-    if (location.location_ == LinkageLocation::ANY_REGISTER) {
+    if (location.IsAnyRegister()) {
       // any machine register.
       return UnallocatedOperand(UnallocatedOperand::MUST_HAVE_REGISTER,
                                 virtual_register);
     }
-    if (location.location_ < 0) {
+    if (location.IsCallerFrameSlot()) {
       // a location on the caller frame.
       return UnallocatedOperand(UnallocatedOperand::FIXED_SLOT,
-                                location.location_, virtual_register);
+                                location.AsCallerFrameSlot(), virtual_register);
     }
-    if (location.location_ > LinkageLocation::ANY_REGISTER) {
+    if (location.IsCalleeFrameSlot()) {
       // a spill location on this (callee) frame.
-      return UnallocatedOperand(
-          UnallocatedOperand::FIXED_SLOT,
-          location.location_ - LinkageLocation::ANY_REGISTER - 1,
-          virtual_register);
+      return UnallocatedOperand(UnallocatedOperand::FIXED_SLOT,
+                                location.AsCalleeFrameSlot(), virtual_register);
     }
     // a fixed register.
-    if (RepresentationOf(type) == kRepFloat64) {
+    MachineType rep = RepresentationOf(type);
+    if (rep == kRepFloat64 || rep == kRepFloat32) {
       return UnallocatedOperand(UnallocatedOperand::FIXED_DOUBLE_REGISTER,
-                                location.location_, virtual_register);
+                                location.AsRegister(), virtual_register);
     }
     return UnallocatedOperand(UnallocatedOperand::FIXED_REGISTER,
-                              location.location_, virtual_register);
+                              location.AsRegister(), virtual_register);
   }
 
   InstructionSelector* selector_;
@@ -228,7 +242,7 @@ class OperandGenerator {
 // The whole instruction is treated as a unit by the register allocator, and
 // thus no spills or moves can be introduced between the flags-setting
 // instruction and the branch or set it should be combined with.
-class FlagsContinuation FINAL {
+class FlagsContinuation final {
  public:
   FlagsContinuation() : mode_(kFlags_none) {}
 
@@ -277,41 +291,7 @@ class FlagsContinuation FINAL {
 
   void Commute() {
     DCHECK(!IsNone());
-    switch (condition_) {
-      case kEqual:
-      case kNotEqual:
-      case kOverflow:
-      case kNotOverflow:
-        return;
-      case kSignedLessThan:
-        condition_ = kSignedGreaterThan;
-        return;
-      case kSignedGreaterThanOrEqual:
-        condition_ = kSignedLessThanOrEqual;
-        return;
-      case kSignedLessThanOrEqual:
-        condition_ = kSignedGreaterThanOrEqual;
-        return;
-      case kSignedGreaterThan:
-        condition_ = kSignedLessThan;
-        return;
-      case kUnsignedLessThan:
-        condition_ = kUnsignedGreaterThan;
-        return;
-      case kUnsignedGreaterThanOrEqual:
-        condition_ = kUnsignedLessThanOrEqual;
-        return;
-      case kUnsignedLessThanOrEqual:
-        condition_ = kUnsignedGreaterThanOrEqual;
-        return;
-      case kUnsignedGreaterThan:
-        condition_ = kUnsignedLessThan;
-        return;
-      case kUnorderedEqual:
-      case kUnorderedNotEqual:
-        return;
-    }
-    UNREACHABLE();
+    condition_ = CommuteFlagsCondition(condition_);
   }
 
   void OverwriteAndNegateIfEqual(FlagsCondition condition) {

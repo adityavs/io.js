@@ -1,6 +1,13 @@
 #include "env.h"
 #include "env-inl.h"
 #include "v8.h"
+
+#if defined(_MSC_VER)
+#define getpid GetCurrentProcessId
+#else
+#include <unistd.h>
+#endif
+
 #include <stdio.h>
 
 namespace node {
@@ -10,6 +17,7 @@ using v8::Local;
 using v8::Message;
 using v8::StackFrame;
 using v8::StackTrace;
+using v8::TryCatch;
 
 void Environment::PrintSyncTrace() const {
   if (!trace_sync_io_)
@@ -19,7 +27,7 @@ void Environment::PrintSyncTrace() const {
   Local<v8::StackTrace> stack =
       StackTrace::CurrentStackTrace(isolate(), 10, StackTrace::kDetailed);
 
-  fprintf(stderr, "WARNING: Detected use of sync API\n");
+  fprintf(stderr, "(node:%d) WARNING: Detected use of sync API\n", getpid());
 
   for (int i = 0; i < stack->GetFrameCount() - 1; i++) {
     Local<StackFrame> stack_frame = stack->GetFrame(i);
@@ -53,6 +61,40 @@ void Environment::PrintSyncTrace() const {
     }
   }
   fflush(stderr);
+}
+
+
+bool Environment::KickNextTick() {
+  TickInfo* info = tick_info();
+
+  if (info->in_tick()) {
+    return true;
+  }
+
+  if (info->length() == 0) {
+    isolate()->RunMicrotasks();
+  }
+
+  if (info->length() == 0) {
+    info->set_index(0);
+    return true;
+  }
+
+  info->set_in_tick(true);
+
+  // process nextTicks after call
+  TryCatch try_catch;
+  try_catch.SetVerbose(true);
+  tick_callback_function()->Call(process_object(), 0, nullptr);
+
+  info->set_in_tick(false);
+
+  if (try_catch.HasCaught()) {
+    info->set_last_threw(true);
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace node

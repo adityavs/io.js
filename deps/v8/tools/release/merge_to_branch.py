@@ -104,9 +104,8 @@ class CreateCommitMessage(Step):
 
   def RunStep(self):
 
-    # Stringify: [123, 234] -> "r123, r234"
-    self["revision_list"] = ", ".join(map(lambda s: "r%s" % s,
-                                      self["full_revision_list"]))
+    # Stringify: ["abcde", "12345"] -> "abcde, 12345"
+    self["revision_list"] = ", ".join(self["full_revision_list"])
 
     if not self["revision_list"]:  # pragma: no cover
       self.Die("Revision list is empty.")
@@ -169,12 +168,12 @@ class IncrementVersion(Step):
     if self._options.revert_master:
       return
     new_patch = str(int(self["patch"]) + 1)
-    if self.Confirm("Automatically increment PATCH_LEVEL? (Saying 'n' will "
+    if self.Confirm("Automatically increment V8_PATCH_LEVEL? (Saying 'n' will "
                     "fire up your EDITOR on %s so you can make arbitrary "
                     "changes. When you're done, save the file and exit your "
                     "EDITOR.)" % VERSION_FILE):
       text = FileToText(os.path.join(self.default_cwd, VERSION_FILE))
-      text = MSub(r"(?<=#define PATCH_LEVEL)(?P<space>\s+)\d*$",
+      text = MSub(r"(?<=#define V8_PATCH_LEVEL)(?P<space>\s+)\d*$",
                   r"\g<space>%s" % new_patch,
                   text)
       TextToFile(text, os.path.join(self.default_cwd, VERSION_FILE))

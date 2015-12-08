@@ -6,6 +6,7 @@
 
 #include <limits.h>
 #include <string.h>  // memcpy
+#include <vector>
 
 // When creating strings >= this length v8's gc spins up and consumes
 // most of the execution time. For these cases it's more performant to
@@ -15,19 +16,20 @@
 namespace node {
 
 using v8::EscapableHandleScope;
-using v8::Handle;
 using v8::HandleScope;
 using v8::Isolate;
 using v8::Local;
+using v8::Object;
 using v8::String;
 using v8::Value;
+using v8::MaybeLocal;
 
 
 template <typename ResourceType, typename TypeName>
 class ExternString: public ResourceType {
   public:
     ~ExternString() override {
-      delete[] data_;
+      free(const_cast<TypeName*>(data_));
       isolate()->AdjustAmountOfExternalAllocatedMemory(-byte_length());
     }
 
@@ -51,7 +53,11 @@ class ExternString: public ResourceType {
       if (length == 0)
         return scope.Escape(String::Empty(isolate));
 
-      TypeName* new_data = new TypeName[length];
+      TypeName* new_data =
+          static_cast<TypeName*>(malloc(length * sizeof(*new_data)));
+      if (new_data == nullptr) {
+        return Local<String>();
+      }
       memcpy(new_data, data, length * sizeof(*new_data));
 
       return scope.Escape(ExternString<ResourceType, TypeName>::New(isolate,
@@ -71,10 +77,15 @@ class ExternString: public ResourceType {
       ExternString* h_str = new ExternString<ResourceType, TypeName>(isolate,
                                                                      data,
                                                                      length);
-      Local<String> str = String::NewExternal(isolate, h_str);
+      MaybeLocal<String> str = String::NewExternal(isolate, h_str);
       isolate->AdjustAmountOfExternalAllocatedMemory(h_str->byte_length());
 
-      return scope.Escape(str);
+      if (str.IsEmpty()) {
+        delete h_str;
+        return Local<String>();
+      }
+
+      return scope.Escape(str.ToLocalChecked());
     }
 
     inline Isolate* isolate() const { return isolate_; }
@@ -132,7 +143,7 @@ size_t base64_decoded_size(const TypeName* src, size_t size) {
 
 
 // supports regular and URL-safe base64
-static const int unbase64_table[] =
+static const int8_t unbase64_table[] =
   { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -2, -1, -1, -2, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -2, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 62, -1, 62, -1, 63,
@@ -150,62 +161,83 @@ static const int unbase64_table[] =
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
   };
-#define unbase64(x) unbase64_table[(uint8_t)(x)]
+#define unbase64(x)                                                           \
+  static_cast<uint8_t>(unbase64_table[static_cast<uint8_t>(x)])
 
 
 template <typename TypeName>
-size_t base64_decode(char* buf,
-                     size_t len,
-                     const TypeName* src,
-                     const size_t srcLen) {
-  char a, b, c, d;
-  char* dst = buf;
-  char* dstEnd = buf + len;
-  const TypeName* srcEnd = src + srcLen;
-
-  while (src < srcEnd && dst < dstEnd) {
-    int remaining = srcEnd - src;
-
-    while (unbase64(*src) < 0 && src < srcEnd)
-      src++, remaining--;
-    if (remaining == 0 || *src == '=')
-      break;
-    a = unbase64(*src++);
-
-    while (unbase64(*src) < 0 && src < srcEnd)
-      src++, remaining--;
-    if (remaining <= 1 || *src == '=')
-      break;
-    b = unbase64(*src++);
-
-    *dst++ = (a << 2) | ((b & 0x30) >> 4);
-    if (dst == dstEnd)
-      break;
-
-    while (unbase64(*src) < 0 && src < srcEnd)
-      src++, remaining--;
-    if (remaining <= 2 || *src == '=')
-      break;
-    c = unbase64(*src++);
-
-    *dst++ = ((b & 0x0F) << 4) | ((c & 0x3C) >> 2);
-    if (dst == dstEnd)
-      break;
-
-    while (unbase64(*src) < 0 && src < srcEnd)
-      src++, remaining--;
-    if (remaining <= 3 || *src == '=')
-      break;
-    d = unbase64(*src++);
-
-    *dst++ = ((c & 0x03) << 6) | (d & 0x3F);
+size_t base64_decode_slow(char* dst, size_t dstlen,
+                          const TypeName* src, size_t srclen) {
+  uint8_t hi;
+  uint8_t lo;
+  size_t i = 0;
+  size_t k = 0;
+  for (;;) {
+#define V(expr)                                                               \
+    while (i < srclen) {                                                      \
+      const uint8_t c = src[i];                                               \
+      lo = unbase64(c);                                                       \
+      i += 1;                                                                 \
+      if (lo < 64)                                                            \
+        break;  /* Legal character. */                                        \
+      if (c == '=')                                                           \
+        return k;                                                             \
+    }                                                                         \
+    expr;                                                                     \
+    if (i >= srclen)                                                          \
+      return k;                                                               \
+    if (k >= dstlen)                                                          \
+      return k;                                                               \
+    hi = lo;
+    V(/* Nothing. */);
+    V(dst[k++] = ((hi & 0x3F) << 2) | ((lo & 0x30) >> 4));
+    V(dst[k++] = ((hi & 0x0F) << 4) | ((lo & 0x3C) >> 2));
+    V(dst[k++] = ((hi & 0x03) << 6) | ((lo & 0x3F) >> 0));
+#undef V
   }
-
-  return dst - buf;
+  UNREACHABLE();
 }
 
 
-//// HEX ////
+template <typename TypeName>
+size_t base64_decode_fast(char* const dst, const size_t dstlen,
+                          const TypeName* const src, const size_t srclen,
+                          const size_t decoded_size) {
+  const size_t available = dstlen < decoded_size ? dstlen : decoded_size;
+  const size_t max_i = srclen / 4 * 4;
+  const size_t max_k = available / 3 * 3;
+  size_t i = 0;
+  size_t k = 0;
+  while (i < max_i && k < max_k) {
+    const uint32_t v =
+        unbase64(src[i + 0]) << 24 |
+        unbase64(src[i + 1]) << 16 |
+        unbase64(src[i + 2]) << 8 |
+        unbase64(src[i + 3]);
+    // If MSB is set, input contains whitespace or is not valid base64.
+    if (v & 0x80808080) {
+      break;
+    }
+    dst[k + 0] = ((v >> 22) & 0xFC) | ((v >> 20) & 0x03);
+    dst[k + 1] = ((v >> 12) & 0xF0) | ((v >> 10) & 0x0F);
+    dst[k + 2] = ((v >>  2) & 0xC0) | ((v >>  0) & 0x3F);
+    i += 4;
+    k += 3;
+  }
+  if (i < srclen && k < dstlen) {
+    return k + base64_decode_slow(dst + k, dstlen - k, src + i, srclen - i);
+  }
+  return k;
+}
+
+
+template <typename TypeName>
+size_t base64_decode(char* const dst, const size_t dstlen,
+                     const TypeName* const src, const size_t srclen) {
+  const size_t decoded_size = base64_decoded_size(src, srclen);
+  return base64_decode_fast(dst, dstlen, src, srclen, decoded_size);
+}
+
 
 template <typename TypeName>
 unsigned hex2bin(TypeName c) {
@@ -238,7 +270,7 @@ size_t hex_decode(char* buf,
 
 
 bool StringBytes::GetExternalParts(Isolate* isolate,
-                                   Handle<Value> val,
+                                   Local<Value> val,
                                    const char** data,
                                    size_t* len) {
   if (Buffer::HasInstance(val)) {
@@ -271,10 +303,50 @@ bool StringBytes::GetExternalParts(Isolate* isolate,
 }
 
 
+size_t StringBytes::WriteUCS2(char* buf,
+                              size_t buflen,
+                              size_t nbytes,
+                              const char* data,
+                              Local<String> str,
+                              int flags,
+                              size_t* chars_written) {
+  uint16_t* const dst = reinterpret_cast<uint16_t*>(buf);
+
+  size_t max_chars = (buflen / sizeof(*dst));
+  size_t nchars;
+  size_t alignment = reinterpret_cast<uintptr_t>(dst) % sizeof(*dst);
+  if (alignment == 0) {
+    nchars = str->Write(dst, 0, max_chars, flags);
+    *chars_written = nchars;
+    return nchars * sizeof(*dst);
+  }
+
+  uint16_t* aligned_dst =
+      reinterpret_cast<uint16_t*>(buf + sizeof(*dst) - alignment);
+  ASSERT_EQ(reinterpret_cast<uintptr_t>(aligned_dst) % sizeof(*dst), 0);
+
+  // Write all but the last char
+  nchars = str->Write(aligned_dst, 0, max_chars - 1, flags);
+
+  // Shift everything to unaligned-left
+  memmove(dst, aligned_dst, nchars * sizeof(*dst));
+
+  // One more char to be written
+  uint16_t last;
+  if (nchars == max_chars - 1 && str->Write(&last, nchars, 1, flags) != 0) {
+    memcpy(buf + nchars * sizeof(*dst), &last, sizeof(last));
+    nchars++;
+  }
+
+  *chars_written = nchars;
+  return nchars * sizeof(*dst);
+}
+
+
 size_t StringBytes::Write(Isolate* isolate,
                           char* buf,
                           size_t buflen,
-                          Handle<Value> val,
+                          Local<Value> val,
                           enum encoding encoding,
                           int* chars_written) {
   HandleScope scope(isolate);
@@ -312,26 +384,38 @@ size_t StringBytes::Write(Isolate* isolate,
       break;
 
     case UCS2: {
-      uint16_t* const dst = reinterpret_cast<uint16_t*>(buf);
       size_t nchars;
+
       if (is_extern && !str->IsOneByte()) {
         memcpy(buf, data, nbytes);
-        nchars = nbytes / sizeof(*dst);
+        nchars = nbytes / sizeof(uint16_t);
       } else {
-        nchars = buflen / sizeof(*dst);
-        nchars = str->Write(dst, 0, nchars, flags);
-        nbytes = nchars * sizeof(*dst);
-      }
-      if (IsBigEndian()) {
-        // Node's "ucs2" encoding wants LE character data stored in
-        // the Buffer, so we need to reorder on BE platforms.  See
-        // http://nodejs.org/api/buffer.html regarding Node's "ucs2"
-        // encoding specification
-        for (size_t i = 0; i < nchars; i++)
-          dst[i] = dst[i] << 8 | dst[i] >> 8;
+        nbytes = WriteUCS2(buf, buflen, nbytes, data, str, flags, &nchars);
       }
       if (chars_written != nullptr)
         *chars_written = nchars;
+
+      if (!IsBigEndian())
+        break;
+
+      // Node's "ucs2" encoding wants LE character data stored in
+      // the Buffer, so we need to reorder on BE platforms.  See
+      // http://nodejs.org/api/buffer.html regarding Node's "ucs2"
+      // encoding specification
+
+      const bool is_aligned =
+          reinterpret_cast<uintptr_t>(buf) % sizeof(uint16_t);
+      if (is_aligned) {
+        uint16_t* const dst = reinterpret_cast<uint16_t*>(buf);
+        SwapBytes(dst, dst, nchars);
+      }
+
+      ASSERT_EQ(sizeof(uint16_t), 2);
+      for (size_t i = 0; i < nchars; i++) {
+        char tmp = buf[i * 2];
+        buf[i * 2] = buf[i * 2 + 1];
+        buf[i * 2 + 1] = tmp;
+      }
       break;
     }
 
@@ -369,7 +453,7 @@ size_t StringBytes::Write(Isolate* isolate,
 
 
 bool StringBytes::IsValidString(Isolate* isolate,
-                                Handle<String> string,
+                                Local<String> string,
                                 enum encoding enc) {
   if (enc == HEX && string->Length() % 2 != 0)
     return false;
@@ -382,7 +466,7 @@ bool StringBytes::IsValidString(Isolate* isolate,
 // Will always be at least big enough, but may have some extra
 // UTF8 can be as much as 3x the size, Base64 can have 1-2 extra bytes
 size_t StringBytes::StorageSize(Isolate* isolate,
-                                Handle<Value> val,
+                                Local<Value> val,
                                 enum encoding encoding) {
   HandleScope scope(isolate);
   size_t data_size = 0;
@@ -431,7 +515,7 @@ size_t StringBytes::StorageSize(Isolate* isolate,
 
 
 size_t StringBytes::Size(Isolate* isolate,
-                         Handle<Value> val,
+                         Local<Value> val,
                          enum encoding encoding) {
   HandleScope scope(isolate);
   size_t data_size = 0;
@@ -681,15 +765,22 @@ Local<Value> StringBytes::Encode(Isolate* isolate,
   Local<String> val;
   switch (encoding) {
     case BUFFER:
-      return scope.Escape(Buffer::New(isolate, buf, buflen));
+      {
+        Local<Object> vbuf =
+            Buffer::Copy(isolate, buf, buflen).ToLocalChecked();
+        return scope.Escape(vbuf);
+      }
 
     case ASCII:
       if (contains_non_ascii(buf, buflen)) {
-        char* out = new char[buflen];
+        char* out = static_cast<char*>(malloc(buflen));
+        if (out == nullptr) {
+          return Local<String>();
+        }
         force_ascii(buf, out, buflen);
         if (buflen < EXTERN_APEX) {
           val = OneByteString(isolate, out, buflen);
-          delete[] out;
+          free(out);
         } else {
           val = ExternOneByteString::New(isolate, out, buflen);
         }
@@ -717,14 +808,17 @@ Local<Value> StringBytes::Encode(Isolate* isolate,
 
     case BASE64: {
       size_t dlen = base64_encoded_size(buflen);
-      char* dst = new char[dlen];
+      char* dst = static_cast<char*>(malloc(dlen));
+      if (dst == nullptr) {
+        return Local<String>();
+      }
 
       size_t written = base64_encode(buf, buflen, dst, dlen);
       CHECK_EQ(written, dlen);
 
       if (dlen < EXTERN_APEX) {
         val = OneByteString(isolate, dst, dlen);
-        delete[] dst;
+        free(dst);
       } else {
         val = ExternOneByteString::New(isolate, dst, dlen);
       }
@@ -733,13 +827,16 @@ Local<Value> StringBytes::Encode(Isolate* isolate,
 
     case HEX: {
       size_t dlen = buflen * 2;
-      char* dst = new char[dlen];
+      char* dst = static_cast<char*>(malloc(dlen));
+      if (dst == nullptr) {
+        return Local<String>();
+      }
       size_t written = hex_encode(buf, buflen, dst, dlen);
       CHECK_EQ(written, dlen);
 
       if (dlen < EXTERN_APEX) {
         val = OneByteString(isolate, dst, dlen);
-        delete[] dst;
+        free(dst);
       } else {
         val = ExternOneByteString::New(isolate, dst, dlen);
       }
@@ -759,7 +856,16 @@ Local<Value> StringBytes::Encode(Isolate* isolate,
                                  const uint16_t* buf,
                                  size_t buflen) {
   Local<String> val;
-
+  std::vector<uint16_t> dst;
+  if (IsBigEndian()) {
+    // Node's "ucs2" encoding expects LE character data inside a
+    // Buffer, so we need to reorder on BE platforms.  See
+    // http://nodejs.org/api/buffer.html regarding Node's "ucs2"
+    // encoding specification
+    dst.resize(buflen);
+    SwapBytes(&dst[0], buf, buflen);
+    buf = &dst[0];
+  }
   if (buflen < EXTERN_APEX) {
     val = String::NewFromTwoByte(isolate,
                                  buf,

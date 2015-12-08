@@ -5,14 +5,17 @@
 #ifndef V8_HEAP_INCREMENTAL_MARKING_H_
 #define V8_HEAP_INCREMENTAL_MARKING_H_
 
-
+#include "src/cancelable-task.h"
 #include "src/execution.h"
-#include "src/heap/mark-compact.h"
+#include "src/heap/incremental-marking-job.h"
 #include "src/objects.h"
 
 namespace v8 {
 namespace internal {
 
+// Forward declarations.
+class MarkBit;
+class PagedSpace;
 
 class IncrementalMarking {
  public:
@@ -25,6 +28,21 @@ class IncrementalMarking {
   enum ForceCompletionAction { FORCE_COMPLETION, DO_NOT_FORCE_COMPLETION };
 
   enum GCRequestType { COMPLETE_MARKING, OVERAPPROXIMATION };
+
+  struct StepActions {
+    StepActions(CompletionAction complete_action_,
+                ForceMarkingAction force_marking_,
+                ForceCompletionAction force_completion_)
+        : completion_action(complete_action_),
+          force_marking(force_marking_),
+          force_completion(force_completion_) {}
+
+    CompletionAction completion_action;
+    ForceMarkingAction force_marking;
+    ForceCompletionAction force_completion;
+  };
+
+  static StepActions IdleStepActions();
 
   explicit IncrementalMarking(Heap* heap);
 
@@ -41,7 +59,8 @@ class IncrementalMarking {
   bool weak_closure_was_overapproximated() const {
     return weak_closure_was_overapproximated_;
   }
-  void set_weak_closure_was_overapproximated(bool val) {
+
+  void SetWeakClosureWasOverApproximatedForTesting(bool val) {
     weak_closure_was_overapproximated_ = val;
   }
 
@@ -53,21 +72,22 @@ class IncrementalMarking {
 
   inline bool IsComplete() { return state() == COMPLETE; }
 
+  inline bool IsReadyToOverApproximateWeakClosure() const {
+    return request_type_ == OVERAPPROXIMATION &&
+           !weak_closure_was_overapproximated_;
+  }
+
   GCRequestType request_type() const { return request_type_; }
 
-  bool WorthActivating();
+  bool CanBeActivated();
 
-  bool ShouldActivate();
+  bool ShouldActivateEvenWithoutIdleNotification();
 
   bool WasActivated();
 
-  enum CompactionFlag { ALLOW_COMPACTION, PREVENT_COMPACTION };
+  void Start(const char* reason = nullptr);
 
-  void Start(CompactionFlag flag = ALLOW_COMPACTION);
-
-  void Stop();
-
-  void PrepareForScavenge();
+  void MarkObjectGroups();
 
   void UpdateMarkingDequeAfterScavenge();
 
@@ -75,13 +95,22 @@ class IncrementalMarking {
 
   void Finalize();
 
-  void Abort();
+  void Stop();
 
-  void OverApproximateWeakClosure();
+  void OverApproximateWeakClosure(CompletionAction action);
 
   void MarkingComplete(CompletionAction action);
 
   void Epilogue();
+
+  // Performs incremental marking steps of step_size_in_bytes as long as
+  // deadline_ins_ms is not reached. step_size_in_bytes can be 0 to compute
+  // an estimate increment. Returns the remaining time that cannot be used
+  // for incremental marking anymore because a single step would exceed the
+  // deadline.
+  double AdvanceIncrementalMarking(intptr_t step_size_in_bytes,
+                                   double deadline_in_ms,
+                                   StepActions step_actions);
 
   // It's hard to know how much work the incremental marker should do to make
   // progress in the face of the mutator creating new work for it.  We start
@@ -155,7 +184,7 @@ class IncrementalMarking {
     SetOldSpacePageFlags(chunk, IsMarking(), IsCompacting());
   }
 
-  inline void SetNewSpacePageFlags(NewSpacePage* chunk) {
+  inline void SetNewSpacePageFlags(MemoryChunk* chunk) {
     SetNewSpacePageFlags(chunk, IsMarking());
   }
 
@@ -163,19 +192,7 @@ class IncrementalMarking {
 
   void ActivateGeneratedStub(Code* stub);
 
-  void NotifyOfHighPromotionRate() {
-    if (IsMarking()) {
-      if (marking_speed_ < kFastMarking) {
-        if (FLAG_trace_gc) {
-          PrintPID(
-              "Increasing marking speed to %d "
-              "due to high promotion rate\n",
-              static_cast<int>(kFastMarking));
-        }
-        marking_speed_ = kFastMarking;
-      }
-    }
-  }
+  void NotifyOfHighPromotionRate();
 
   void EnterNoMarkingScope() { no_marking_scope_depth_++; }
 
@@ -189,6 +206,14 @@ class IncrementalMarking {
 
   bool IsIdleMarkingDelayCounterLimitReached();
 
+  INLINE(static void MarkObject(Heap* heap, HeapObject* object));
+
+  Heap* heap() const { return heap_; }
+
+  IncrementalMarkingJob* incremental_marking_job() {
+    return &incremental_marking_job_;
+  }
+
  private:
   int64_t SpaceLeftInOldSpace();
 
@@ -196,7 +221,7 @@ class IncrementalMarking {
 
   void ResetStepCounters();
 
-  void StartMarking(CompactionFlag flag);
+  void StartMarking();
 
   void ActivateIncrementalWriteBarrier(PagedSpace* space);
   static void ActivateIncrementalWriteBarrier(NewSpace* space);
@@ -209,7 +234,7 @@ class IncrementalMarking {
   static void SetOldSpacePageFlags(MemoryChunk* chunk, bool is_marking,
                                    bool is_compacting);
 
-  static void SetNewSpacePageFlags(NewSpacePage* chunk, bool is_marking);
+  static void SetNewSpacePageFlags(MemoryChunk* chunk, bool is_marking);
 
   INLINE(void ProcessMarkingDeque());
 
@@ -243,7 +268,11 @@ class IncrementalMarking {
 
   bool weak_closure_was_overapproximated_;
 
+  int weak_closure_approximation_rounds_;
+
   GCRequestType request_type_;
+
+  IncrementalMarkingJob incremental_marking_job_;
 
   DISALLOW_IMPLICIT_CONSTRUCTORS(IncrementalMarking);
 };

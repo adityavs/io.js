@@ -5,11 +5,17 @@
 #ifndef V8_ACCESSORS_H_
 #define V8_ACCESSORS_H_
 
+#include "include/v8.h"
 #include "src/allocation.h"
 #include "src/globals.h"
+#include "src/handles.h"
+#include "src/property-details.h"
 
 namespace v8 {
 namespace internal {
+
+// Forward declarations.
+class ExecutableAccessorInfo;
 
 // The list of accessor descriptors. This is a second-order macro
 // taking a macro to be applied to all accessor descriptor names.
@@ -21,7 +27,6 @@ namespace internal {
   V(FunctionName)                 \
   V(FunctionLength)               \
   V(FunctionPrototype)            \
-  V(RegExpSource)                 \
   V(ScriptColumnOffset)           \
   V(ScriptCompilationType)        \
   V(ScriptContextData)            \
@@ -81,6 +86,14 @@ class Accessors : public AllStatic {
   static bool IsJSObjectFieldAccessor(Handle<Map> map, Handle<Name> name,
                                       int* object_offset);
 
+  // Returns true for properties that are accessors to ArrayBufferView and
+  // derived classes fields. If true, *object_offset contains offset of
+  // object field. The caller still has to check whether the underlying
+  // buffer was neutered.
+  static bool IsJSArrayBufferViewFieldAccessor(Handle<Map> map,
+                                               Handle<Name> name,
+                                               int* object_offset);
+
   static Handle<AccessorInfo> MakeAccessor(
       Isolate* isolate,
       Handle<Name> name,
@@ -91,11 +104,6 @@ class Accessors : public AllStatic {
   static Handle<ExecutableAccessorInfo> CloneAccessor(
       Isolate* isolate,
       Handle<ExecutableAccessorInfo> accessor);
-
-
- private:
-  // Helper functions.
-  static Handle<Object> FlattenNumber(Isolate* isolate, Handle<Object> value);
 };
 
 } }  // namespace v8::internal

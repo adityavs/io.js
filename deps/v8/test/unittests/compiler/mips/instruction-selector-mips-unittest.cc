@@ -497,8 +497,8 @@ static const MemoryAccess kMemoryAccesses[] = {
     {kMachInt16, kMipsLh, kMipsSh},
     {kMachUint16, kMipsLhu, kMipsSh},
     {kMachInt32, kMipsLw, kMipsSw},
-    {kRepFloat32, kMipsLwc1, kMipsSwc1},
-    {kRepFloat64, kMipsLdc1, kMipsSdc1}};
+    {kMachFloat32, kMipsLwc1, kMipsSwc1},
+    {kMachFloat64, kMipsLdc1, kMipsSdc1}};
 
 
 struct MemoryAccessImm {
@@ -798,6 +798,51 @@ TEST_F(InstructionSelectorTest, Word32EqualWithZero) {
     EXPECT_EQ(kFlags_set, s[0]->flags_mode());
     EXPECT_EQ(kEqual, s[0]->flags_condition());
   }
+}
+
+
+TEST_F(InstructionSelectorTest, Word32Clz) {
+  StreamBuilder m(this, kMachUint32, kMachUint32);
+  Node* const p0 = m.Parameter(0);
+  Node* const n = m.Word32Clz(p0);
+  m.Return(n);
+  Stream s = m.Build();
+  ASSERT_EQ(1U, s.size());
+  EXPECT_EQ(kMipsClz, s[0]->arch_opcode());
+  ASSERT_EQ(1U, s[0]->InputCount());
+  EXPECT_EQ(s.ToVreg(p0), s.ToVreg(s[0]->InputAt(0)));
+  ASSERT_EQ(1U, s[0]->OutputCount());
+  EXPECT_EQ(s.ToVreg(n), s.ToVreg(s[0]->Output()));
+}
+
+
+TEST_F(InstructionSelectorTest, Float32Abs) {
+  StreamBuilder m(this, kMachFloat32, kMachFloat32);
+  Node* const p0 = m.Parameter(0);
+  Node* const n = m.Float32Abs(p0);
+  m.Return(n);
+  Stream s = m.Build();
+  ASSERT_EQ(1U, s.size());
+  EXPECT_EQ(kMipsAbsS, s[0]->arch_opcode());
+  ASSERT_EQ(1U, s[0]->InputCount());
+  EXPECT_EQ(s.ToVreg(p0), s.ToVreg(s[0]->InputAt(0)));
+  ASSERT_EQ(1U, s[0]->OutputCount());
+  EXPECT_EQ(s.ToVreg(n), s.ToVreg(s[0]->Output()));
+}
+
+
+TEST_F(InstructionSelectorTest, Float64Abs) {
+  StreamBuilder m(this, kMachFloat64, kMachFloat64);
+  Node* const p0 = m.Parameter(0);
+  Node* const n = m.Float64Abs(p0);
+  m.Return(n);
+  Stream s = m.Build();
+  ASSERT_EQ(1U, s.size());
+  EXPECT_EQ(kMipsAbsD, s[0]->arch_opcode());
+  ASSERT_EQ(1U, s[0]->InputCount());
+  EXPECT_EQ(s.ToVreg(p0), s.ToVreg(s[0]->InputAt(0)));
+  ASSERT_EQ(1U, s[0]->OutputCount());
+  EXPECT_EQ(s.ToVreg(n), s.ToVreg(s[0]->Output()));
 }
 
 }  // namespace compiler

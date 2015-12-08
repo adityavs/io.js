@@ -25,16 +25,17 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// TODO(mythria): Remove this after this flag is turned on globally
+#define V8_IMMINENT_DEPRECATION_WARNINGS
+
 #include <utility>
 
 #include "src/v8.h"
 
 #include "src/global-handles.h"
-#include "src/snapshot.h"
 #include "test/cctest/cctest.h"
 
 using namespace v8::internal;
-
 
 static Isolate* GetIsolateFrom(LocalContext* context) {
   return reinterpret_cast<Isolate*>((*context)->GetIsolate());
@@ -91,7 +92,8 @@ TEST(WeakSet_Weakness) {
   {
     HandleScope scope(isolate);
     Handle<Smi> smi(Smi::FromInt(23), isolate);
-    Runtime::WeakCollectionSet(weakset, key, smi);
+    int32_t hash = Object::GetOrCreateHash(isolate, key)->value();
+    JSWeakCollection::Set(weakset, key, smi, hash);
   }
   CHECK_EQ(1, ObjectHashTable::cast(weakset->table())->NumberOfElements());
 
@@ -146,7 +148,8 @@ TEST(WeakSet_Shrinking) {
     for (int i = 0; i < 32; i++) {
       Handle<JSObject> object = factory->NewJSObjectFromMap(map);
       Handle<Smi> smi(Smi::FromInt(i), isolate);
-      Runtime::WeakCollectionSet(weakset, object, smi);
+      int32_t hash = Object::GetOrCreateHash(isolate, object)->value();
+      JSWeakCollection::Set(weakset, object, smi, hash);
     }
   }
 
@@ -183,8 +186,9 @@ TEST(WeakSet_Regress2060a) {
   Handle<JSWeakSet> weakset = AllocateJSWeakSet(isolate);
 
   // Start second old-space page so that values land on evacuation candidate.
-  Page* first_page = heap->old_pointer_space()->anchor()->next_page();
-  factory->NewFixedArray(900 * KB / kPointerSize, TENURED);
+  Page* first_page = heap->old_space()->anchor()->next_page();
+  int dummy_array_size = Page::kMaxRegularHeapObjectSize - 92 * KB;
+  factory->NewFixedArray(dummy_array_size / kPointerSize, TENURED);
 
   // Fill up weak set with values on an evacuation candidate.
   {
@@ -193,13 +197,14 @@ TEST(WeakSet_Regress2060a) {
       Handle<JSObject> object = factory->NewJSObject(function, TENURED);
       CHECK(!heap->InNewSpace(object->address()));
       CHECK(!first_page->Contains(object->address()));
-      Runtime::WeakCollectionSet(weakset, key, object);
+      int32_t hash = Object::GetOrCreateHash(isolate, key)->value();
+      JSWeakCollection::Set(weakset, key, object, hash);
     }
   }
 
   // Force compacting garbage collection.
   CHECK(FLAG_always_compact);
-  heap->CollectAllGarbage(Heap::kNoGCFlags);
+  heap->CollectAllGarbage();
 }
 
 
@@ -221,8 +226,9 @@ TEST(WeakSet_Regress2060b) {
       factory->function_string());
 
   // Start second old-space page so that keys land on evacuation candidate.
-  Page* first_page = heap->old_pointer_space()->anchor()->next_page();
-  factory->NewFixedArray(900 * KB / kPointerSize, TENURED);
+  Page* first_page = heap->old_space()->anchor()->next_page();
+  int dummy_array_size = Page::kMaxRegularHeapObjectSize - 92 * KB;
+  factory->NewFixedArray(dummy_array_size / kPointerSize, TENURED);
 
   // Fill up weak set with keys on an evacuation candidate.
   Handle<JSObject> keys[32];
@@ -234,13 +240,14 @@ TEST(WeakSet_Regress2060b) {
   Handle<JSWeakSet> weakset = AllocateJSWeakSet(isolate);
   for (int i = 0; i < 32; i++) {
     Handle<Smi> smi(Smi::FromInt(i), isolate);
-    Runtime::WeakCollectionSet(weakset, keys[i], smi);
+    int32_t hash = Object::GetOrCreateHash(isolate, keys[i])->value();
+    JSWeakCollection::Set(weakset, keys[i], smi, hash);
   }
 
   // Force compacting garbage collection. The subsequent collections are used
   // to verify that key references were actually updated.
   CHECK(FLAG_always_compact);
-  heap->CollectAllGarbage(Heap::kNoGCFlags);
-  heap->CollectAllGarbage(Heap::kNoGCFlags);
-  heap->CollectAllGarbage(Heap::kNoGCFlags);
+  heap->CollectAllGarbage();
+  heap->CollectAllGarbage();
+  heap->CollectAllGarbage();
 }

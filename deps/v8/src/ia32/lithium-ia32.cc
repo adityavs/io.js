@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <sstream>
+#include "src/ia32/lithium-ia32.h"
 
-#include "src/v8.h"
+#include <sstream>
 
 #if V8_TARGET_ARCH_IA32
 
@@ -186,13 +186,6 @@ void LCompareNumericAndBranch::PrintDataTo(StringStream* stream) {
   stream->Add(" %s ", Token::String(op()));
   right()->PrintTo(stream);
   stream->Add(" then B%d else B%d", true_block_id(), false_block_id());
-}
-
-
-void LIsObjectAndBranch::PrintDataTo(StringStream* stream) {
-  stream->Add("if is_object(");
-  value()->PrintTo(stream);
-  stream->Add(") then B%d else B%d", true_block_id(), false_block_id());
 }
 
 
@@ -379,6 +372,11 @@ LOperand* LPlatformChunk::GetNextSpillSlot(RegisterKind kind) {
 }
 
 
+void LLoadGlobalViaContext::PrintDataTo(StringStream* stream) {
+  stream->Add("depth:%d slot:%d", depth(), slot_index());
+}
+
+
 void LStoreNamedField::PrintDataTo(StringStream* stream) {
   object()->PrintTo(stream);
   std::ostringstream os;
@@ -393,6 +391,12 @@ void LStoreNamedGeneric::PrintDataTo(StringStream* stream) {
   stream->Add(".");
   stream->Add(String::cast(*name())->ToCString().get());
   stream->Add(" <- ");
+  value()->PrintTo(stream);
+}
+
+
+void LStoreGlobalViaContext::PrintDataTo(StringStream* stream) {
+  stream->Add("depth:%d slot:%d <- ", depth(), slot_index());
   value()->PrintTo(stream);
 }
 
@@ -953,25 +957,22 @@ void LChunkBuilder::AddInstruction(LInstruction* instr,
   }
   chunk_->AddInstruction(instr, current_block_);
 
-  if (instr->IsCall()) {
+  if (instr->IsCall() || instr->IsPrologue()) {
     HValue* hydrogen_value_for_lazy_bailout = hydrogen_val;
-    LInstruction* instruction_needing_environment = NULL;
     if (hydrogen_val->HasObservableSideEffects()) {
       HSimulate* sim = HSimulate::cast(hydrogen_val->next());
-      instruction_needing_environment = instr;
       sim->ReplayEnvironment(current_block_->last_environment());
       hydrogen_value_for_lazy_bailout = sim;
     }
     LInstruction* bailout = AssignEnvironment(new(zone()) LLazyBailout());
     bailout->set_hydrogen_value(hydrogen_value_for_lazy_bailout);
     chunk_->AddInstruction(bailout, current_block_);
-    if (instruction_needing_environment != NULL) {
-      // Store the lazy deopt environment with the instruction if needed.
-      // Right now it is only used for LInstanceOfKnownGlobal.
-      instruction_needing_environment->
-          SetDeferredLazyDeoptimizationEnvironment(bailout->environment());
-    }
   }
+}
+
+
+LInstruction* LChunkBuilder::DoPrologue(HPrologue* instr) {
+  return new (zone()) LPrologue();
 }
 
 
@@ -1025,22 +1026,22 @@ LInstruction* LChunkBuilder::DoArgumentsElements(HArgumentsElements* elems) {
 
 
 LInstruction* LChunkBuilder::DoInstanceOf(HInstanceOf* instr) {
-  LOperand* left = UseFixed(instr->left(), InstanceofStub::left());
-  LOperand* right = UseFixed(instr->right(), InstanceofStub::right());
+  LOperand* left =
+      UseFixed(instr->left(), InstanceOfDescriptor::LeftRegister());
+  LOperand* right =
+      UseFixed(instr->right(), InstanceOfDescriptor::RightRegister());
   LOperand* context = UseFixed(instr->context(), esi);
-  LInstanceOf* result = new(zone()) LInstanceOf(context, left, right);
+  LInstanceOf* result = new (zone()) LInstanceOf(context, left, right);
   return MarkAsCall(DefineFixed(result, eax), instr);
 }
 
 
-LInstruction* LChunkBuilder::DoInstanceOfKnownGlobal(
-    HInstanceOfKnownGlobal* instr) {
-  LInstanceOfKnownGlobal* result =
-      new(zone()) LInstanceOfKnownGlobal(
-          UseFixed(instr->context(), esi),
-          UseFixed(instr->left(), InstanceofStub::left()),
-          FixedTemp(edi));
-  return MarkAsCall(DefineFixed(result, eax), instr);
+LInstruction* LChunkBuilder::DoHasInPrototypeChainAndBranch(
+    HHasInPrototypeChainAndBranch* instr) {
+  LOperand* object = UseRegister(instr->object());
+  LOperand* prototype = UseRegister(instr->prototype());
+  LOperand* temp = TempRegister();
+  return new (zone()) LHasInPrototypeChainAndBranch(object, prototype, temp);
 }
 
 
@@ -1133,37 +1134,24 @@ LInstruction* LChunkBuilder::DoCallWithDescriptor(
   CallInterfaceDescriptor descriptor = instr->descriptor();
   LOperand* target = UseRegisterOrConstantAtStart(instr->target());
   ZoneList<LOperand*> ops(instr->OperandCount(), zone());
+  // Target
   ops.Add(target, zone());
-  for (int i = 1; i < instr->OperandCount(); i++) {
-    LOperand* op =
-        UseFixed(instr->OperandAt(i), descriptor.GetParameterRegister(i - 1));
+  // Context
+  LOperand* op = UseFixed(instr->OperandAt(1), esi);
+  ops.Add(op, zone());
+  // Other register parameters
+  for (int i = LCallWithDescriptor::kImplicitRegisterParameterCount;
+       i < instr->OperandCount(); i++) {
+    op =
+        UseFixed(instr->OperandAt(i),
+                 descriptor.GetRegisterParameter(
+                     i - LCallWithDescriptor::kImplicitRegisterParameterCount));
     ops.Add(op, zone());
   }
 
   LCallWithDescriptor* result = new(zone()) LCallWithDescriptor(
       descriptor, ops, zone());
   return MarkAsCall(DefineFixed(result, eax), instr, CANNOT_DEOPTIMIZE_EAGERLY);
-}
-
-
-LInstruction* LChunkBuilder::DoTailCallThroughMegamorphicCache(
-    HTailCallThroughMegamorphicCache* instr) {
-  LOperand* context = UseFixed(instr->context(), esi);
-  LOperand* receiver_register =
-      UseFixed(instr->receiver(), LoadDescriptor::ReceiverRegister());
-  LOperand* name_register =
-      UseFixed(instr->name(), LoadDescriptor::NameRegister());
-  LOperand* slot = NULL;
-  LOperand* vector = NULL;
-  if (FLAG_vector_ics) {
-    slot = UseFixed(instr->slot(), VectorLoadICDescriptor::SlotRegister());
-    vector =
-        UseFixed(instr->vector(), VectorLoadICDescriptor::VectorRegister());
-  }
-
-  // Not marked as call. It can't deoptimize, and it never returns.
-  return new (zone()) LTailCallThroughMegamorphicCache(
-      context, receiver_register, name_register, slot, vector);
 }
 
 
@@ -1628,8 +1616,7 @@ LInstruction* LChunkBuilder::DoAdd(HAdd* instr) {
   } else if (instr->representation().IsDouble()) {
     return DoArithmeticD(Token::ADD, instr);
   } else if (instr->representation().IsExternal()) {
-    DCHECK(instr->left()->representation().IsExternal());
-    DCHECK(instr->right()->representation().IsInteger32());
+    DCHECK(instr->IsConsistentExternalRepresentation());
     DCHECK(!instr->CheckFlag(HValue::kCanOverflow));
     bool use_lea = LAddI::UseLea(instr);
     LOperand* left = UseRegisterAtStart(instr->left());
@@ -1749,13 +1736,6 @@ LInstruction* LChunkBuilder::DoCompareMinusZeroAndBranch(
 }
 
 
-LInstruction* LChunkBuilder::DoIsObjectAndBranch(HIsObjectAndBranch* instr) {
-  DCHECK(instr->value()->representation().IsSmiOrTagged());
-  LOperand* temp = TempRegister();
-  return new(zone()) LIsObjectAndBranch(UseRegister(instr->value()), temp);
-}
-
-
 LInstruction* LChunkBuilder::DoIsStringAndBranch(HIsStringAndBranch* instr) {
   DCHECK(instr->value()->representation().IsTagged());
   LOperand* temp = TempRegister();
@@ -1837,7 +1817,7 @@ LInstruction* LChunkBuilder::DoDateField(HDateField* instr) {
   LOperand* date = UseFixed(instr->value(), eax);
   LDateField* result =
       new(zone()) LDateField(date, FixedTemp(ecx), instr->index());
-  return MarkAsCall(DefineFixed(result, eax), instr, CAN_DEOPTIMIZE_EAGERLY);
+  return MarkAsCall(DefineFixed(result, eax), instr, CANNOT_DEOPTIMIZE_EAGERLY);
 }
 
 
@@ -2037,6 +2017,16 @@ LInstruction* LChunkBuilder::DoCheckSmi(HCheckSmi* instr) {
 }
 
 
+LInstruction* LChunkBuilder::DoCheckArrayBufferNotNeutered(
+    HCheckArrayBufferNotNeutered* instr) {
+  LOperand* view = UseRegisterAtStart(instr->value());
+  LOperand* scratch = TempRegister();
+  LCheckArrayBufferNotNeutered* result =
+      new (zone()) LCheckArrayBufferNotNeutered(view, scratch);
+  return AssignEnvironment(result);
+}
+
+
 LInstruction* LChunkBuilder::DoCheckInstanceType(HCheckInstanceType* instr) {
   LOperand* value = UseRegisterAtStart(instr->value());
   LOperand* temp = TempRegister();
@@ -2132,21 +2122,13 @@ LInstruction* LChunkBuilder::DoConstant(HConstant* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoLoadGlobalCell(HLoadGlobalCell* instr) {
-  LLoadGlobalCell* result = new(zone()) LLoadGlobalCell;
-  return instr->RequiresHoleCheck()
-      ? AssignEnvironment(DefineAsRegister(result))
-      : DefineAsRegister(result);
-}
-
-
 LInstruction* LChunkBuilder::DoLoadGlobalGeneric(HLoadGlobalGeneric* instr) {
   LOperand* context = UseFixed(instr->context(), esi);
   LOperand* global_object =
       UseFixed(instr->global_object(), LoadDescriptor::ReceiverRegister());
   LOperand* vector = NULL;
   if (instr->HasVectorAndSlot()) {
-    vector = FixedTemp(VectorLoadICDescriptor::VectorRegister());
+    vector = FixedTemp(LoadWithVectorDescriptor::VectorRegister());
   }
 
   LLoadGlobalGeneric* result =
@@ -2155,10 +2137,12 @@ LInstruction* LChunkBuilder::DoLoadGlobalGeneric(HLoadGlobalGeneric* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoStoreGlobalCell(HStoreGlobalCell* instr) {
-  LStoreGlobalCell* result =
-      new(zone()) LStoreGlobalCell(UseRegister(instr->value()));
-  return instr->RequiresHoleCheck() ? AssignEnvironment(result) : result;
+LInstruction* LChunkBuilder::DoLoadGlobalViaContext(
+    HLoadGlobalViaContext* instr) {
+  LOperand* context = UseFixed(instr->context(), esi);
+  DCHECK(instr->slot_index() > 0);
+  LLoadGlobalViaContext* result = new (zone()) LLoadGlobalViaContext(context);
+  return MarkAsCall(DefineFixed(result, eax), instr);
 }
 
 
@@ -2207,7 +2191,7 @@ LInstruction* LChunkBuilder::DoLoadNamedGeneric(HLoadNamedGeneric* instr) {
       UseFixed(instr->object(), LoadDescriptor::ReceiverRegister());
   LOperand* vector = NULL;
   if (instr->HasVectorAndSlot()) {
-    vector = FixedTemp(VectorLoadICDescriptor::VectorRegister());
+    vector = FixedTemp(LoadWithVectorDescriptor::VectorRegister());
   }
   LLoadNamedGeneric* result = new(zone()) LLoadNamedGeneric(
       context, object, vector);
@@ -2238,7 +2222,7 @@ LInstruction* LChunkBuilder::DoLoadKeyed(HLoadKeyed* instr) {
       : UseRegisterOrConstantAtStart(instr->key());
   LInstruction* result = NULL;
 
-  if (!instr->is_typed_elements()) {
+  if (!instr->is_fixed_typed_array()) {
     LOperand* obj = UseRegisterAtStart(instr->elements());
     result = DefineAsRegister(new(zone()) LLoadKeyed(obj, key));
   } else {
@@ -2251,14 +2235,20 @@ LInstruction* LChunkBuilder::DoLoadKeyed(HLoadKeyed* instr) {
     result = DefineAsRegister(new(zone()) LLoadKeyed(backing_store, key));
   }
 
-  if ((instr->is_external() || instr->is_fixed_typed_array()) ?
-      // see LCodeGen::DoLoadKeyedExternalArray
-      ((instr->elements_kind() == EXTERNAL_UINT32_ELEMENTS ||
-        instr->elements_kind() == UINT32_ELEMENTS) &&
-       !instr->CheckFlag(HInstruction::kUint32)) :
-      // see LCodeGen::DoLoadKeyedFixedDoubleArray and
-      // LCodeGen::DoLoadKeyedFixedArray
-      instr->RequiresHoleCheck()) {
+  bool needs_environment;
+  if (instr->is_fixed_typed_array()) {
+    // see LCodeGen::DoLoadKeyedExternalArray
+    needs_environment = elements_kind == UINT32_ELEMENTS &&
+                        !instr->CheckFlag(HInstruction::kUint32);
+  } else {
+    // see LCodeGen::DoLoadKeyedFixedDoubleArray and
+    // LCodeGen::DoLoadKeyedFixedArray
+    needs_environment =
+        instr->RequiresHoleCheck() ||
+        (instr->hole_mode() == CONVERT_HOLE_TO_UNDEFINED && info()->IsStub());
+  }
+
+  if (needs_environment) {
     result = AssignEnvironment(result);
   }
   return result;
@@ -2272,7 +2262,7 @@ LInstruction* LChunkBuilder::DoLoadKeyedGeneric(HLoadKeyedGeneric* instr) {
   LOperand* key = UseFixed(instr->key(), LoadDescriptor::NameRegister());
   LOperand* vector = NULL;
   if (instr->HasVectorAndSlot()) {
-    vector = FixedTemp(VectorLoadICDescriptor::VectorRegister());
+    vector = FixedTemp(LoadWithVectorDescriptor::VectorRegister());
   }
   LLoadKeyedGeneric* result =
       new(zone()) LLoadKeyedGeneric(context, object, key, vector);
@@ -2285,9 +2275,6 @@ LOperand* LChunkBuilder::GetStoreKeyedValueOperand(HStoreKeyed* instr) {
 
   // Determine if we need a byte register in this case for the value.
   bool val_is_fixed_register =
-      elements_kind == EXTERNAL_INT8_ELEMENTS ||
-      elements_kind == EXTERNAL_UINT8_ELEMENTS ||
-      elements_kind == EXTERNAL_UINT8_CLAMPED_ELEMENTS ||
       elements_kind == UINT8_ELEMENTS ||
       elements_kind == INT8_ELEMENTS ||
       elements_kind == UINT8_CLAMPED_ELEMENTS;
@@ -2300,7 +2287,7 @@ LOperand* LChunkBuilder::GetStoreKeyedValueOperand(HStoreKeyed* instr) {
 
 
 LInstruction* LChunkBuilder::DoStoreKeyed(HStoreKeyed* instr) {
-  if (!instr->is_typed_elements()) {
+  if (!instr->is_fixed_typed_array()) {
     DCHECK(instr->elements()->representation().IsTagged());
     DCHECK(instr->key()->representation().IsInteger32() ||
            instr->key()->representation().IsSmi());
@@ -2335,10 +2322,7 @@ LInstruction* LChunkBuilder::DoStoreKeyed(HStoreKeyed* instr) {
        !IsDoubleOrFloatElementsKind(elements_kind)) ||
       (instr->value()->representation().IsDouble() &&
        IsDoubleOrFloatElementsKind(elements_kind)));
-  DCHECK((instr->is_fixed_typed_array() &&
-          instr->elements()->representation().IsTagged()) ||
-         (instr->is_external() &&
-          instr->elements()->representation().IsExternal()));
+  DCHECK(instr->elements()->representation().IsExternal());
 
   LOperand* backing_store = UseRegister(instr->elements());
   LOperand* val = GetStoreKeyedValueOperand(instr);
@@ -2362,8 +2346,15 @@ LInstruction* LChunkBuilder::DoStoreKeyedGeneric(HStoreKeyedGeneric* instr) {
   DCHECK(instr->key()->representation().IsTagged());
   DCHECK(instr->value()->representation().IsTagged());
 
-  LStoreKeyedGeneric* result =
-      new(zone()) LStoreKeyedGeneric(context, object, key, value);
+  LOperand* slot = NULL;
+  LOperand* vector = NULL;
+  if (instr->HasVectorAndSlot()) {
+    slot = FixedTemp(VectorStoreICDescriptor::SlotRegister());
+    vector = FixedTemp(VectorStoreICDescriptor::VectorRegister());
+  }
+
+  LStoreKeyedGeneric* result = new (zone())
+      LStoreKeyedGeneric(context, object, key, value, slot, vector);
   return MarkAsCall(result, instr);
 }
 
@@ -2395,6 +2386,21 @@ LInstruction* LChunkBuilder::DoTrapAllocationMemento(
   LTrapAllocationMemento* result =
       new(zone()) LTrapAllocationMemento(object, temp);
   return AssignEnvironment(result);
+}
+
+
+LInstruction* LChunkBuilder::DoMaybeGrowElements(HMaybeGrowElements* instr) {
+  info()->MarkAsDeferredCalling();
+  LOperand* context = UseFixed(instr->context(), esi);
+  LOperand* object = Use(instr->object());
+  LOperand* elements = Use(instr->elements());
+  LOperand* key = UseRegisterOrConstant(instr->key());
+  LOperand* current_capacity = UseRegisterOrConstant(instr->current_capacity());
+
+  LMaybeGrowElements* result = new (zone())
+      LMaybeGrowElements(context, object, elements, key, current_capacity);
+  DefineFixed(result, eax);
+  return AssignPointerMap(AssignEnvironment(result));
 }
 
 
@@ -2459,9 +2465,28 @@ LInstruction* LChunkBuilder::DoStoreNamedGeneric(HStoreNamedGeneric* instr) {
   LOperand* object =
       UseFixed(instr->object(), StoreDescriptor::ReceiverRegister());
   LOperand* value = UseFixed(instr->value(), StoreDescriptor::ValueRegister());
+  LOperand* slot = NULL;
+  LOperand* vector = NULL;
+  if (instr->HasVectorAndSlot()) {
+    slot = FixedTemp(VectorStoreICDescriptor::SlotRegister());
+    vector = FixedTemp(VectorStoreICDescriptor::VectorRegister());
+  }
 
   LStoreNamedGeneric* result =
-      new(zone()) LStoreNamedGeneric(context, object, value);
+      new (zone()) LStoreNamedGeneric(context, object, value, slot, vector);
+  return MarkAsCall(result, instr);
+}
+
+
+LInstruction* LChunkBuilder::DoStoreGlobalViaContext(
+    HStoreGlobalViaContext* instr) {
+  LOperand* context = UseFixed(instr->context(), esi);
+  LOperand* value = UseFixed(instr->value(),
+                             StoreGlobalViaContextDescriptor::ValueRegister());
+  DCHECK(instr->slot_index() > 0);
+
+  LStoreGlobalViaContext* result =
+      new (zone()) LStoreGlobalViaContext(context, value);
   return MarkAsCall(result, instr);
 }
 
@@ -2513,13 +2538,6 @@ LInstruction* LChunkBuilder::DoRegExpLiteral(HRegExpLiteral* instr) {
 }
 
 
-LInstruction* LChunkBuilder::DoFunctionLiteral(HFunctionLiteral* instr) {
-  LOperand* context = UseFixed(instr->context(), esi);
-  return MarkAsCall(
-      DefineFixed(new(zone()) LFunctionLiteral(context), eax), instr);
-}
-
-
 LInstruction* LChunkBuilder::DoOsrEntry(HOsrEntry* instr) {
   DCHECK(argument_count_ == 0);
   allocator_->MarkAsOsrEntry();
@@ -2538,7 +2556,7 @@ LInstruction* LChunkBuilder::DoParameter(HParameter* instr) {
     CallInterfaceDescriptor descriptor =
         info()->code_stub()->GetCallInterfaceDescriptor();
     int index = static_cast<int>(instr->index());
-    Register reg = descriptor.GetEnvironmentParameterRegister(index);
+    Register reg = descriptor.GetRegisterParameter(index);
     return DefineFixed(result, reg);
   }
 }
@@ -2616,7 +2634,7 @@ LInstruction* LChunkBuilder::DoToFastProperties(HToFastProperties* instr) {
 
 LInstruction* LChunkBuilder::DoTypeof(HTypeof* instr) {
   LOperand* context = UseFixed(instr->context(), esi);
-  LOperand* value = UseAtStart(instr->value());
+  LOperand* value = UseFixed(instr->value(), ebx);
   LTypeof* result = new(zone()) LTypeof(context, value);
   return MarkAsCall(DefineFixed(result, eax), instr);
 }
@@ -2669,7 +2687,7 @@ LInstruction* LChunkBuilder::DoEnterInlined(HEnterInlined* instr) {
   inner->BindContext(instr->closure_context());
   inner->set_entry(instr);
   current_block_->UpdateEnvironment(inner);
-  chunk_->AddInlinedClosure(instr->closure());
+  chunk_->AddInlinedFunction(instr->shared());
   return NULL;
 }
 
@@ -2739,6 +2757,7 @@ LInstruction* LChunkBuilder::DoAllocateBlockContext(
 }
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_TARGET_ARCH_IA32

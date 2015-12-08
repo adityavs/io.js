@@ -39,11 +39,13 @@ namespace node {
 #endif
 
 // Strings are per-isolate primitives but Environment proxies them
-// for the sake of convenience.
+// for the sake of convenience.  Strings should be ASCII-only.
 #define PER_ISOLATE_STRING_PROPERTIES(V)                                      \
   V(address_string, "address")                                                \
+  V(alpn_buffer_string, "alpnBuffer")                                         \
   V(args_string, "args")                                                      \
   V(argv_string, "argv")                                                      \
+  V(arrow_message_string, "arrowMessage")                                     \
   V(async, "async")                                                           \
   V(async_queue_string, "_asyncQueue")                                        \
   V(atime_string, "atime")                                                    \
@@ -68,7 +70,7 @@ namespace node {
   V(dev_string, "dev")                                                        \
   V(disposed_string, "_disposed")                                             \
   V(domain_string, "domain")                                                  \
-  V(domain_abort_uncaught_exc_string, "_makeCallbackAbortOnUncaught")         \
+  V(emitting_top_level_domain_error_string, "_emittingTopLevelDomainError")   \
   V(exchange_string, "exchange")                                              \
   V(idle_string, "idle")                                                      \
   V(irq_string, "irq")                                                        \
@@ -87,6 +89,7 @@ namespace node {
   V(exponent_string, "exponent")                                              \
   V(exports_string, "exports")                                                \
   V(ext_key_usage_string, "ext_key_usage")                                    \
+  V(external_stream_string, "_externalStream")                                \
   V(family_string, "family")                                                  \
   V(fatal_exception_string, "_fatalException")                                \
   V(fd_string, "fd")                                                          \
@@ -128,6 +131,7 @@ namespace node {
   V(netmask_string, "netmask")                                                \
   V(nice_string, "nice")                                                      \
   V(nlink_string, "nlink")                                                    \
+  V(npn_buffer_string, "npnBuffer")                                           \
   V(nsname_string, "nsname")                                                  \
   V(ocsp_request_string, "OCSPRequest")                                       \
   V(offset_string, "offset")                                                  \
@@ -178,6 +182,7 @@ namespace node {
   V(serial_string, "serial")                                                  \
   V(scavenge_string, "scavenge")                                              \
   V(scopeid_string, "scopeid")                                                \
+  V(selected_npn_buffer_string, "selectedNpnBuffer")                          \
   V(sent_shutdown_string, "sentShutdown")                                     \
   V(serial_number_string, "serialNumber")                                     \
   V(service_string, "service")                                                \
@@ -185,7 +190,6 @@ namespace node {
   V(session_id_string, "sessionId")                                           \
   V(signal_string, "signal")                                                  \
   V(size_string, "size")                                                      \
-  V(smalloc_p_string, "_smalloc_p")                                           \
   V(sni_context_err_string, "Invalid SNI context")                            \
   V(sni_context_string, "sni_context")                                        \
   V(speed_string, "speed")                                                    \
@@ -198,11 +202,13 @@ namespace node {
   V(syscall_string, "syscall")                                                \
   V(tick_callback_string, "_tickCallback")                                    \
   V(tick_domain_cb_string, "_tickDomainCallback")                             \
+  V(ticketkeycallback_string, "onticketkeycallback")                          \
   V(timeout_string, "timeout")                                                \
   V(times_string, "times")                                                    \
   V(timestamp_string, "timestamp")                                            \
   V(title_string, "title")                                                    \
   V(tls_npn_string, "tls_npn")                                                \
+  V(tls_alpn_string, "tls_alpn")                                              \
   V(tls_ocsp_string, "tls_ocsp")                                              \
   V(tls_sni_string, "tls_sni")                                                \
   V(tls_string, "tls")                                                        \
@@ -225,15 +231,19 @@ namespace node {
   V(zero_return_string, "ZERO_RETURN")                                        \
 
 #define ENVIRONMENT_STRONG_PERSISTENT_PROPERTIES(V)                           \
+  V(add_properties_by_index_function, v8::Function)                           \
   V(as_external, v8::External)                                                \
   V(async_hooks_init_function, v8::Function)                                  \
   V(async_hooks_pre_function, v8::Function)                                   \
   V(async_hooks_post_function, v8::Function)                                  \
+  V(async_hooks_destroy_function, v8::Function)                               \
   V(binding_cache_object, v8::Object)                                         \
   V(buffer_constructor_function, v8::Function)                                \
+  V(buffer_prototype_object, v8::Object)                                      \
   V(context, v8::Context)                                                     \
   V(domain_array, v8::Array)                                                  \
   V(fs_stats_constructor_function, v8::Function)                              \
+  V(generic_internal_field_template, v8::ObjectTemplate)                      \
   V(jsstream_constructor_template, v8::FunctionTemplate)                      \
   V(module_load_list_array, v8::Array)                                        \
   V(pipe_constructor_template, v8::FunctionTemplate)                          \
@@ -336,6 +346,27 @@ class Environment {
     DISALLOW_COPY_AND_ASSIGN(TickInfo);
   };
 
+  class ArrayBufferAllocatorInfo {
+   public:
+    inline uint32_t* fields();
+    inline int fields_count() const;
+    inline bool no_zero_fill() const;
+    inline void reset_fill_flag();
+
+   private:
+    friend class Environment;  // So we can call the constructor.
+    inline ArrayBufferAllocatorInfo();
+
+    enum Fields {
+      kNoZeroFill,
+      kFieldsCount
+    };
+
+    uint32_t fields_[kFieldsCount];
+
+    DISALLOW_COPY_AND_ASSIGN(ArrayBufferAllocatorInfo);
+  };
+
   typedef void (*HandleCleanupCb)(Environment* env,
                                   uv_handle_t* handle,
                                   void* arg);
@@ -398,6 +429,8 @@ class Environment {
   inline AsyncHooks* async_hooks();
   inline DomainFlag* domain_flag();
   inline TickInfo* tick_info();
+  inline ArrayBufferAllocatorInfo* array_buffer_allocator_info();
+  inline uint64_t timer_base() const;
 
   static inline Environment* from_cares_timer_handle(uv_timer_t* handle);
   inline uv_timer_t* cares_timer_handle();
@@ -405,23 +438,24 @@ class Environment {
   inline ares_channel* cares_channel_ptr();
   inline ares_task_list* cares_task_list();
 
-  inline bool using_smalloc_alloc_cb() const;
-  inline void set_using_smalloc_alloc_cb(bool value);
-
-  inline bool using_abort_on_uncaught_exc() const;
-  inline void set_using_abort_on_uncaught_exc(bool value);
-
   inline bool using_domains() const;
   inline void set_using_domains(bool value);
-
-  inline bool using_asyncwrap() const;
-  inline void set_using_asyncwrap(bool value);
 
   inline bool printed_error() const;
   inline void set_printed_error(bool value);
 
   void PrintSyncTrace() const;
   inline void set_trace_sync_io(bool value);
+
+  inline int64_t get_async_wrap_uid();
+
+  bool KickNextTick();
+
+  inline uint32_t* heap_statistics_buffer() const;
+  inline void set_heap_statistics_buffer(uint32_t* pointer);
+
+  inline char* http_parser_buffer() const;
+  inline void set_http_parser_buffer(char* buffer);
 
   inline void ThrowError(const char* errmsg);
   inline void ThrowTypeError(const char* errmsg);
@@ -457,6 +491,7 @@ class Environment {
                                 const char* name,
                                 v8::FunctionCallback callback);
 
+  inline v8::Local<v8::Object> NewInternalFieldObject();
 
   // Strings are shared across shared contexts. The getters simply proxy to
   // the per-isolate primitive.
@@ -501,15 +536,15 @@ class Environment {
   AsyncHooks async_hooks_;
   DomainFlag domain_flag_;
   TickInfo tick_info_;
+  ArrayBufferAllocatorInfo array_buffer_allocator_info_;
+  const uint64_t timer_base_;
   uv_timer_t cares_timer_handle_;
   ares_channel cares_channel_;
   ares_task_list cares_task_list_;
-  bool using_smalloc_alloc_cb_;
   bool using_domains_;
-  bool using_abort_on_uncaught_exc_;
-  bool using_asyncwrap_;
   bool printed_error_;
   bool trace_sync_io_;
+  int64_t async_wrap_uid_;
   debugger::Agent debugger_agent_;
 
   HandleWrapQueue handle_wrap_queue_;
@@ -517,6 +552,10 @@ class Environment {
   ListHead<HandleCleanup,
            &HandleCleanup::handle_cleanup_queue_> handle_cleanup_queue_;
   int handle_cleanup_waiting_;
+
+  uint32_t* heap_statistics_buffer_ = nullptr;
+
+  char* http_parser_buffer_;
 
 #define V(PropertyName, TypeName)                                             \
   v8::Persistent<TypeName> PropertyName ## _;

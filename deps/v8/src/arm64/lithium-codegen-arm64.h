@@ -28,7 +28,6 @@ class LCodeGen: public LCodeGenBase {
       : LCodeGenBase(chunk, assembler, info),
         deoptimizations_(4, info->zone()),
         jump_table_(4, info->zone()),
-        deoptimization_literals_(8, info->zone()),
         inlined_function_count_(0),
         scope_(info->scope()),
         translations_(info->zone()),
@@ -38,13 +37,8 @@ class LCodeGen: public LCodeGenBase {
         safepoints_(info->zone()),
         resolver_(this),
         expected_safepoint_kind_(Safepoint::kSimple),
-        after_push_argument_(false),
-        inlined_arguments_(false) {
+        pushed_arguments_(0) {
     PopulateDeoptimizationLiteralsWithInlinedFunctions();
-  }
-
-  ~LCodeGen() {
-    DCHECK(!after_push_argument_ || inlined_arguments_);
   }
 
   // Simple accessors.
@@ -122,6 +116,7 @@ class LCodeGen: public LCodeGenBase {
   // Deferred code support.
   void DoDeferredNumberTagD(LNumberTagD* instr);
   void DoDeferredStackCheck(LStackCheck* instr);
+  void DoDeferredMaybeGrowElements(LMaybeGrowElements* instr);
   void DoDeferredStringCharCodeAt(LStringCharCodeAt* instr);
   void DoDeferredStringCharFromCode(LStringCharFromCode* instr);
   void DoDeferredMathAbsTagged(LMathAbsTagged* instr,
@@ -137,7 +132,6 @@ class LCodeGen: public LCodeGenBase {
                            LOperand* temp1,
                            LOperand* temp2);
   void DoDeferredAllocate(LAllocate* instr);
-  void DoDeferredInstanceOfKnownGlobal(LInstanceOfKnownGlobal* instr);
   void DoDeferredInstanceMigration(LCheckMaps* instr, Register object);
   void DoDeferredLoadMutableDouble(LLoadFieldByIndex* instr,
                                    Register result,
@@ -198,6 +192,8 @@ class LCodeGen: public LCodeGenBase {
 
   template <class T>
   void EmitVectorLoadICRegisters(T* instr);
+  template <class T>
+  void EmitVectorStoreICRegisters(T* instr);
 
   // Emits optimized code for %_IsString(x).  Preserves input register.
   // Returns the condition on which a final split to
@@ -205,7 +201,6 @@ class LCodeGen: public LCodeGenBase {
   Condition EmitIsString(Register input, Register temp1, Label* is_not_string,
                          SmiCheck check_needed);
 
-  int DefineDeoptimizationLiteral(Handle<Object> literal);
   void PopulateDeoptimizationData(Handle<Code> code);
   void PopulateDeoptimizationLiteralsWithInlinedFunctions();
 
@@ -284,7 +279,7 @@ class LCodeGen: public LCodeGenBase {
   void RestoreCallerDoubles();
 
   // Code generation steps.  Returns true if code generation should continue.
-  void GenerateBodyInstructionPre(LInstruction* instr) OVERRIDE;
+  void GenerateBodyInstructionPre(LInstruction* instr) override;
   bool GeneratePrologue();
   bool GenerateDeferredCode();
   bool GenerateJumpTable();
@@ -332,7 +327,7 @@ class LCodeGen: public LCodeGenBase {
                          LInstruction* instr);
 
   // Support for recording safepoint and position information.
-  void RecordAndWritePosition(int position) OVERRIDE;
+  void RecordAndWritePosition(int position) override;
   void RecordSafepoint(LPointerMap* pointers,
                        Safepoint::Kind kind,
                        int arguments,
@@ -345,11 +340,10 @@ class LCodeGen: public LCodeGenBase {
   void RecordSafepointWithLazyDeopt(LInstruction* instr,
                                     SafepointMode safepoint_mode);
 
-  void EnsureSpaceForLazyDeopt(int space_needed) OVERRIDE;
+  void EnsureSpaceForLazyDeopt(int space_needed) override;
 
   ZoneList<LEnvironment*> deoptimizations_;
   ZoneList<Deoptimizer::JumpTableEntry*> jump_table_;
-  ZoneList<Handle<Object> > deoptimization_literals_;
   int inlined_function_count_;
   Scope* const scope_;
   TranslationBuffer translations_;
@@ -366,14 +360,14 @@ class LCodeGen: public LCodeGenBase {
 
   Safepoint::Kind expected_safepoint_kind_;
 
-  // This flag is true when we are after a push (but before a call).
-  // In this situation, jssp no longer references the end of the stack slots so,
-  // we can only reference a stack slot via fp.
-  bool after_push_argument_;
-  // If we have inlined arguments, we are no longer able to use jssp because
-  // jssp is modified and we never know if we are in a block after or before
-  // the pop of the arguments (which restores jssp).
-  bool inlined_arguments_;
+  // The number of arguments pushed onto the stack, either by this block or by a
+  // predecessor.
+  int pushed_arguments_;
+
+  void RecordPushedArgumentsDelta(int delta) {
+    pushed_arguments_ += delta;
+    DCHECK(pushed_arguments_ >= 0);
+  }
 
   int old_position_;
 

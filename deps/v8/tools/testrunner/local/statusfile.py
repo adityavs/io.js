@@ -40,12 +40,13 @@ NO_VARIANTS = "NO_VARIANTS"
 # These are just for the status files and are mapped below in DEFS:
 FAIL_OK = "FAIL_OK"
 PASS_OR_FAIL = "PASS_OR_FAIL"
+FAIL_SLOPPY = "FAIL_SLOPPY"
 
 ALWAYS = "ALWAYS"
 
 KEYWORDS = {}
 for key in [SKIP, FAIL, PASS, OKAY, TIMEOUT, CRASH, SLOW, FLAKY, FAIL_OK,
-            FAST_VARIANTS, NO_VARIANTS, PASS_OR_FAIL, ALWAYS]:
+            FAST_VARIANTS, NO_VARIANTS, PASS_OR_FAIL, FAIL_SLOPPY, ALWAYS]:
   KEYWORDS[key] = key
 
 DEFS = {FAIL_OK: [FAIL, OKAY],
@@ -55,8 +56,9 @@ DEFS = {FAIL_OK: [FAIL, OKAY],
 VARIABLES = {ALWAYS: True}
 for var in ["debug", "release", "big", "little",
             "android_arm", "android_arm64", "android_ia32", "android_x87",
-            "arm", "arm64", "ia32", "mips", "mipsel", "mips64el", "x64", "x87", "nacl_ia32",
-            "nacl_x64", "ppc", "ppc64", "macos", "windows", "linux", "aix"]:
+            "android_x64", "arm", "arm64", "ia32", "mips", "mipsel", "mips64",
+            "mips64el", "x64", "x87", "nacl_ia32", "nacl_x64", "ppc", "ppc64",
+            "macos", "windows", "linux", "aix"]:
   VARIABLES[var] = var
 
 
@@ -105,7 +107,7 @@ def _AddOutcome(result, new):
 def _ParseOutcomeList(rule, outcomes, target_dict, variables):
   result = set([])
   if type(outcomes) == str:
-   outcomes = [outcomes]
+    outcomes = [outcomes]
   for item in outcomes:
     if type(item) == str:
       _AddOutcome(result, item)

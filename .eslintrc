@@ -3,13 +3,16 @@ env:
 
 # enable ECMAScript features
 ecmaFeatures:
-  blockBindings: true
-  templateStrings: true
-  octalLiterals: true
+  arrowFunctions: true
   binaryLiterals: true
-  generators: true
+  blockBindings: true
+  classes: true
   forOf: true
+  generators: true
+  objectLiteralShorthandMethods: true
   objectLiteralShorthandProperties: true
+  octalLiterals: true
+  templateStrings: true
 
 rules:
   # Possible Errors
@@ -64,6 +67,13 @@ rules:
   eol-last: 2
   ## no trailing spaces
   no-trailing-spaces: 2
+  # require space after keywords, eg 'for (..)'
+  space-after-keywords: 2
+
+  # ECMAScript 6
+  # list: http://eslint.org/docs/rules/#ecmascript-6
+  ## Suggest using 'const' wherever possible
+  prefer-const: 2
 
   # Strict Mode
   # list: https://github.com/eslint/eslint/tree/master/docs/rules#strict-mode
@@ -77,6 +87,8 @@ rules:
 
   # Custom rules in tools/eslint-rules
   require-buffer: 2
+  new-with-error: [2, "Error", "RangeError", "TypeError", "SyntaxError", "ReferenceError"]
+
 
 # Global scoped method and vars
 globals:

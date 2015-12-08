@@ -21,15 +21,19 @@ using v8::External;
 using v8::Function;
 using v8::FunctionCallbackInfo;
 using v8::FunctionTemplate;
-using v8::Handle;
 using v8::HandleScope;
 using v8::Integer;
 using v8::Isolate;
 using v8::Local;
+using v8::Maybe;
+using v8::MaybeLocal;
+using v8::Name;
+using v8::NamedPropertyHandlerConfiguration;
 using v8::None;
 using v8::Object;
 using v8::ObjectTemplate;
 using v8::Persistent;
+using v8::PropertyAttribute;
 using v8::PropertyCallbackInfo;
 using v8::Script;
 using v8::ScriptCompiler;
@@ -60,9 +64,10 @@ class ContextifyContext {
   explicit ContextifyContext(Environment* env, Local<Object> sandbox)
       : env_(env),
         sandbox_(env->isolate(), sandbox),
-        context_(env->isolate(), CreateV8Context(env)),
         // Wait for sandbox_, proxy_global_, and context_ to die
         references_(0) {
+    context_.Reset(env->isolate(), CreateV8Context(env));
+
     sandbox_.SetWeak(this, WeakCallback<Object, kSandbox>);
     sandbox_.MarkIndependent();
     references_++;
@@ -183,7 +188,7 @@ class ContextifyContext {
     Local<Object> wrapper =
         env->script_data_constructor_function()->NewInstance();
     if (wrapper.IsEmpty())
-      return scope.Escape(Local<Value>::New(env->isolate(), Handle<Value>()));
+      return scope.Escape(Local<Value>::New(env->isolate(), Local<Value>()));
 
     Wrap(wrapper, this);
     return scope.Escape(wrapper);
@@ -201,18 +206,19 @@ class ContextifyContext {
 
     Local<ObjectTemplate> object_template =
         function_template->InstanceTemplate();
-    object_template->SetNamedPropertyHandler(GlobalPropertyGetterCallback,
+
+    NamedPropertyHandlerConfiguration config(GlobalPropertyGetterCallback,
                                              GlobalPropertySetterCallback,
                                              GlobalPropertyQueryCallback,
                                              GlobalPropertyDeleterCallback,
                                              GlobalPropertyEnumeratorCallback,
                                              CreateDataWrapper(env));
-    object_template->SetAccessCheckCallbacks(GlobalPropertyNamedAccessCheck,
-                                             GlobalPropertyIndexedAccessCheck);
+    object_template->SetHandler(config);
 
     Local<Context> ctx = Context::New(env->isolate(), nullptr, object_template);
-    if (!ctx.IsEmpty())
-      ctx->SetSecurityToken(env->context()->GetSecurityToken());
+
+    CHECK(!ctx.IsEmpty());
+    ctx->SetSecurityToken(env->context()->GetSecurityToken());
 
     env->AssignToContext(ctx);
 
@@ -256,6 +262,12 @@ class ContextifyContext {
     if (script_source.IsEmpty())
       return;  // Exception pending.
     Local<Context> debug_context = Debug::GetDebugContext();
+    if (debug_context.IsEmpty()) {
+      // Force-load the debug context.
+      Debug::GetMirror(args.GetIsolate()->GetCurrentContext(), args[0]);
+      debug_context = Debug::GetDebugContext();
+      CHECK(!debug_context.IsEmpty());
+    }
     Environment* env = Environment::GetCurrent(args);
     ScopedEnvironment env_scope(debug_context, env);
     Context::Scope context_scope(debug_context);
@@ -342,47 +354,39 @@ class ContextifyContext {
   }
 
 
-  static bool GlobalPropertyNamedAccessCheck(Local<Object> host,
-                                             Local<Value> key,
-                                             AccessType type,
-                                             Local<Value> data) {
-    return true;
-  }
-
-
-  static bool GlobalPropertyIndexedAccessCheck(Local<Object> host,
-                                               uint32_t key,
-                                               AccessType type,
-                                               Local<Value> data) {
-    return true;
-  }
-
-
   static void GlobalPropertyGetterCallback(
-      Local<String> property,
+      Local<Name> property,
       const PropertyCallbackInfo<Value>& args) {
     Isolate* isolate = args.GetIsolate();
 
     ContextifyContext* ctx =
         Unwrap<ContextifyContext>(args.Data().As<Object>());
 
+    // Stil initializing
+    if (ctx->context_.IsEmpty())
+      return;
+
     Local<Object> sandbox = PersistentToLocal(isolate, ctx->sandbox_);
-    Local<Value> rv = sandbox->GetRealNamedProperty(property);
-    if (rv.IsEmpty()) {
+    MaybeLocal<Value> maybe_rv =
+        sandbox->GetRealNamedProperty(ctx->context(), property);
+    if (maybe_rv.IsEmpty()) {
       Local<Object> proxy_global = PersistentToLocal(isolate,
                                                      ctx->proxy_global_);
-      rv = proxy_global->GetRealNamedProperty(property);
-    }
-    if (!rv.IsEmpty() && rv == ctx->sandbox_) {
-      rv = PersistentToLocal(isolate, ctx->proxy_global_);
+      maybe_rv = proxy_global->GetRealNamedProperty(ctx->context(), property);
     }
 
-    args.GetReturnValue().Set(rv);
+    Local<Value> rv;
+    if (maybe_rv.ToLocal(&rv)) {
+      if (rv == ctx->sandbox_)
+        rv = PersistentToLocal(isolate, ctx->proxy_global_);
+
+      args.GetReturnValue().Set(rv);
+    }
   }
 
 
   static void GlobalPropertySetterCallback(
-      Local<String> property,
+      Local<Name> property,
       Local<Value> value,
       const PropertyCallbackInfo<Value>& args) {
     Isolate* isolate = args.GetIsolate();
@@ -390,42 +394,64 @@ class ContextifyContext {
     ContextifyContext* ctx =
         Unwrap<ContextifyContext>(args.Data().As<Object>());
 
+    // Stil initializing
+    if (ctx->context_.IsEmpty())
+      return;
+
     PersistentToLocal(isolate, ctx->sandbox_)->Set(property, value);
   }
 
 
   static void GlobalPropertyQueryCallback(
-      Local<String> property,
+      Local<Name> property,
       const PropertyCallbackInfo<Integer>& args) {
     Isolate* isolate = args.GetIsolate();
 
     ContextifyContext* ctx =
         Unwrap<ContextifyContext>(args.Data().As<Object>());
 
-    Local<Object> sandbox = PersistentToLocal(isolate, ctx->sandbox_);
-    Local<Object> proxy_global = PersistentToLocal(isolate,
-                                                   ctx->proxy_global_);
+    // Stil initializing
+    if (ctx->context_.IsEmpty())
+      return;
 
-    bool in_sandbox = sandbox->GetRealNamedProperty(property).IsEmpty();
-    bool in_proxy_global =
-        proxy_global->GetRealNamedProperty(property).IsEmpty();
-    if (!in_sandbox || !in_proxy_global) {
-      args.GetReturnValue().Set(None);
+    Local<Object> sandbox = PersistentToLocal(isolate, ctx->sandbox_);
+    Maybe<PropertyAttribute> maybe_prop_attr =
+        sandbox->GetRealNamedPropertyAttributes(ctx->context(), property);
+
+    if (maybe_prop_attr.IsNothing()) {
+      Local<Object> proxy_global = PersistentToLocal(isolate,
+          ctx->proxy_global_);
+
+      maybe_prop_attr =
+          proxy_global->GetRealNamedPropertyAttributes(ctx->context(),
+              property);
+    }
+
+    if (maybe_prop_attr.IsJust()) {
+      PropertyAttribute prop_attr = maybe_prop_attr.FromJust();
+      args.GetReturnValue().Set(prop_attr);
     }
   }
 
 
   static void GlobalPropertyDeleterCallback(
-      Local<String> property,
+      Local<Name> property,
       const PropertyCallbackInfo<Boolean>& args) {
     Isolate* isolate = args.GetIsolate();
 
     ContextifyContext* ctx =
         Unwrap<ContextifyContext>(args.Data().As<Object>());
 
-    bool success = PersistentToLocal(isolate,
-                                     ctx->sandbox_)->Delete(property);
-    args.GetReturnValue().Set(success);
+    // Stil initializing
+    if (ctx->context_.IsEmpty())
+      return;
+
+    Local<Object> sandbox = PersistentToLocal(isolate, ctx->sandbox_);
+
+    Maybe<bool> success = sandbox->Delete(ctx->context(), property);
+
+    if (success.IsJust())
+      args.GetReturnValue().Set(success.FromJust());
   }
 
 
@@ -433,6 +459,10 @@ class ContextifyContext {
       const PropertyCallbackInfo<Array>& args) {
     ContextifyContext* ctx =
         Unwrap<ContextifyContext>(args.Data().As<Object>());
+
+    // Stil initializing
+    if (ctx->context_.IsEmpty())
+      return;
 
     Local<Object> sandbox = PersistentToLocal(args.GetIsolate(), ctx->sandbox_);
     args.GetReturnValue().Set(sandbox->GetPropertyNames());
@@ -474,13 +504,15 @@ class ContextifyScript : public BaseObject {
     TryCatch try_catch;
     Local<String> code = args[0]->ToString(env->isolate());
     Local<String> filename = GetFilenameArg(args, 1);
+    Local<Integer> lineOffset = GetLineOffsetArg(args, 1);
+    Local<Integer> columnOffset = GetColumnOffsetArg(args, 1);
     bool display_errors = GetDisplayErrorsArg(args, 1);
     if (try_catch.HasCaught()) {
       try_catch.ReThrow();
       return;
     }
 
-    ScriptOrigin origin(filename);
+    ScriptOrigin origin(filename, lineOffset, columnOffset);
     ScriptCompiler::Source source(code, origin);
     Local<UnboundScript> v8_script =
         ScriptCompiler::CompileUnbound(env->isolate(), &source);
@@ -645,6 +677,39 @@ class ContextifyScript : public BaseObject {
   }
 
 
+  static Local<Integer> GetLineOffsetArg(
+                                      const FunctionCallbackInfo<Value>& args,
+                                      const int i) {
+    Local<Integer> defaultLineOffset = Integer::New(args.GetIsolate(), 0);
+
+    if (!args[i]->IsObject()) {
+      return defaultLineOffset;
+    }
+
+    Local<String> key = FIXED_ONE_BYTE_STRING(args.GetIsolate(), "lineOffset");
+    Local<Value> value = args[i].As<Object>()->Get(key);
+
+    return value->IsUndefined() ? defaultLineOffset : value->ToInteger();
+  }
+
+
+  static Local<Integer> GetColumnOffsetArg(
+                                      const FunctionCallbackInfo<Value>& args,
+                                      const int i) {
+    Local<Integer> defaultColumnOffset = Integer::New(args.GetIsolate(), 0);
+
+    if (!args[i]->IsObject()) {
+      return defaultColumnOffset;
+    }
+
+    Local<String> key = FIXED_ONE_BYTE_STRING(args.GetIsolate(),
+                                              "columnOffset");
+    Local<Value> value = args[i].As<Object>()->Get(key);
+
+    return value->IsUndefined() ? defaultColumnOffset : value->ToInteger();
+  }
+
+
   static bool EvalMachine(Environment* env,
                           const int64_t timeout,
                           const bool display_errors,
@@ -663,7 +728,7 @@ class ContextifyScript : public BaseObject {
 
     Local<Value> result;
     if (timeout != -1) {
-      Watchdog wd(env, timeout);
+      Watchdog wd(env->isolate(), timeout);
       result = script->Run();
     } else {
       result = script->Run();
@@ -702,9 +767,9 @@ class ContextifyScript : public BaseObject {
 };
 
 
-void InitContextify(Handle<Object> target,
-                    Handle<Value> unused,
-                    Handle<Context> context) {
+void InitContextify(Local<Object> target,
+                    Local<Value> unused,
+                    Local<Context> context) {
   Environment* env = Environment::GetCurrent(context);
   ContextifyContext::Init(env, target);
   ContextifyScript::Init(env, target);

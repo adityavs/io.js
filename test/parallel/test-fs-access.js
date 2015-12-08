@@ -49,7 +49,7 @@ createFileWithPerms(readWriteFile, 0o666);
  * continuous integration platform to take care of that.
  */
 var hasWriteAccessForReadonlyFile = false;
-if (process.platform !== 'win32' && process.getuid() === 0) {
+if (!common.isWindows && process.getuid() === 0) {
   hasWriteAccessForReadonlyFile = true;
   try {
     process.setuid('nobody');
@@ -96,11 +96,11 @@ assert.throws(function() {
 
 assert.throws(function() {
   fs.access(__filename, fs.F_OK);
-}, /callback must be a function/);
+}, /"callback" argument must be a function/);
 
 assert.throws(function() {
   fs.access(__filename, fs.F_OK, {});
-}, /callback must be a function/);
+}, /"callback" argument must be a function/);
 
 assert.doesNotThrow(function() {
   fs.accessSync(__filename);

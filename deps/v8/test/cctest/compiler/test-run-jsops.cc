@@ -451,7 +451,6 @@ TEST(LookupStore) {
 
 
 TEST(BlockLoadStore) {
-  FLAG_harmony_scoping = true;
   FunctionTester T("(function(a) { 'use strict'; { let x = a+a; return x; }})");
 
   T.CheckCall(T.Val(46), T.Val(23));
@@ -460,7 +459,6 @@ TEST(BlockLoadStore) {
 
 
 TEST(BlockLoadStoreNested) {
-  FLAG_harmony_scoping = true;
   const char* src =
       "(function(a,b) {"
       "'use strict';"
@@ -525,9 +523,7 @@ TEST(RegExpLiteral) {
 
 
 TEST(ClassLiteral) {
-  FLAG_harmony_classes = true;
   FLAG_harmony_sloppy = true;
-  FLAG_harmony_object_literals = true;
   const char* src =
       "(function(a,b) {"
       "  class C {"

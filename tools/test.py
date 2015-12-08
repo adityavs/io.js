@@ -49,6 +49,7 @@ from datetime import datetime
 from Queue import Queue, Empty
 
 logger = logging.getLogger('testrunner')
+skip_regex = re.compile(r'# SKIP\S*\s+(.*)', re.IGNORECASE)
 
 VERBOSE = False
 
@@ -60,8 +61,9 @@ VERBOSE = False
 
 class ProgressIndicator(object):
 
-  def __init__(self, cases):
+  def __init__(self, cases, flaky_tests_mode):
     self.cases = cases
+    self.flaky_tests_mode = flaky_tests_mode
     self.parallel_queue = Queue(len(cases))
     self.sequential_queue = Queue(len(cases))
     for case in cases:
@@ -73,7 +75,9 @@ class ProgressIndicator(object):
     self.remaining = len(cases)
     self.total = len(cases)
     self.failed = [ ]
+    self.flaky_failed = [ ]
     self.crashed = 0
+    self.flaky_crashed = 0
     self.lock = threading.Lock()
     self.shutdown_event = threading.Event()
 
@@ -134,6 +138,14 @@ class ProgressIndicator(object):
       try:
         start = datetime.now()
         output = case.Run()
+        # SmartOS has a bug that causes unexpected ECONNREFUSED errors.
+        # See https://smartos.org/bugview/OS-2767
+        # If ECONNREFUSED on SmartOS, retry the test one time.
+        if (output.UnexpectedOutput() and
+          sys.platform == 'sunos5' and
+          'ECONNREFUSED' in output.output.stderr):
+            output = case.Run()
+            output.diagnostic.append('ECONNREFUSED received, test retried')
         case.duration = (datetime.now() - start)
       except IOError, e:
         return
@@ -141,9 +153,14 @@ class ProgressIndicator(object):
         return
       self.lock.acquire()
       if output.UnexpectedOutput():
-        self.failed.append(output)
-        if output.HasCrashed():
-          self.crashed += 1
+        if FLAKY in output.test.outcomes and self.flaky_tests_mode == DONTCARE:
+          self.flaky_failed.append(output)
+          if output.HasCrashed():
+            self.flaky_crashed += 1
+        else:
+          self.failed.append(output)
+          if output.HasCrashed():
+            self.crashed += 1
       else:
         self.succeeded += 1
       self.remaining -= 1
@@ -239,6 +256,10 @@ class DotsProgressIndicator(SimpleProgressIndicator):
 
 class TapProgressIndicator(SimpleProgressIndicator):
 
+  def _printDiagnostic(self, messages):
+    for l in messages.splitlines():
+      logger.info('# ' + l)
+
   def Starting(self):
     logger.info('1..%i' % len(self.cases))
     self._done = 0
@@ -250,13 +271,28 @@ class TapProgressIndicator(SimpleProgressIndicator):
     self._done += 1
     command = basename(output.command[-1])
     if output.UnexpectedOutput():
-      logger.info('not ok %i - %s' % (self._done, command))
-      for l in output.output.stderr.splitlines():
-        logger.info('#' + l)
-      for l in output.output.stdout.splitlines():
-        logger.info('#' + l)
+      status_line = 'not ok %i %s' % (self._done, command)
+      if FLAKY in output.test.outcomes and self.flaky_tests_mode == DONTCARE:
+        status_line = status_line + ' # TODO : Fix flaky test'
+      logger.info(status_line)
+      self._printDiagnostic("\n".join(output.diagnostic))
+
+      if output.HasTimedOut():
+        self._printDiagnostic('TIMEOUT')
+
+      self._printDiagnostic(output.output.stderr)
+      self._printDiagnostic(output.output.stdout)
     else:
-      logger.info('ok %i - %s' % (self._done, command))
+      skip = skip_regex.search(output.output.stdout)
+      if skip:
+        logger.info(
+          'ok %i %s # skip %s' % (self._done, command, skip.group(1)))
+      else:
+        status_line = 'ok %i %s' % (self._done, command)
+        if FLAKY in output.test.outcomes:
+          status_line = status_line + ' # TODO : Fix flaky test'
+        logger.info(status_line)
+      self._printDiagnostic("\n".join(output.diagnostic))
 
     duration = output.test.duration
 
@@ -274,8 +310,8 @@ class TapProgressIndicator(SimpleProgressIndicator):
 
 class CompactProgressIndicator(ProgressIndicator):
 
-  def __init__(self, cases, templates):
-    super(CompactProgressIndicator, self).__init__(cases)
+  def __init__(self, cases, flaky_tests_mode, templates):
+    super(CompactProgressIndicator, self).__init__(cases, flaky_tests_mode)
     self.templates = templates
     self.last_status_length = 0
     self.start_time = time.time()
@@ -330,13 +366,13 @@ class CompactProgressIndicator(ProgressIndicator):
 
 class ColorProgressIndicator(CompactProgressIndicator):
 
-  def __init__(self, cases):
+  def __init__(self, cases, flaky_tests_mode):
     templates = {
       'status_line': "[%(mins)02i:%(secs)02i|\033[34m%%%(remaining) 4d\033[0m|\033[32m+%(passed) 4d\033[0m|\033[31m-%(failed) 4d\033[0m]: %(test)s",
       'stdout': "\033[1m%s\033[0m",
       'stderr': "\033[31m%s\033[0m",
     }
-    super(ColorProgressIndicator, self).__init__(cases, templates)
+    super(ColorProgressIndicator, self).__init__(cases, flaky_tests_mode, templates)
 
   def ClearLine(self, last_line_length):
     print "\033[1K\r",
@@ -344,7 +380,7 @@ class ColorProgressIndicator(CompactProgressIndicator):
 
 class MonochromeProgressIndicator(CompactProgressIndicator):
 
-  def __init__(self, cases):
+  def __init__(self, cases, flaky_tests_mode):
     templates = {
       'status_line': "[%(mins)02i:%(secs)02i|%%%(remaining) 4d|+%(passed) 4d|-%(failed) 4d]: %(test)s",
       'stdout': '%s',
@@ -352,7 +388,7 @@ class MonochromeProgressIndicator(CompactProgressIndicator):
       'clear': lambda last_line_length: ("\r" + (" " * last_line_length) + "\r"),
       'max_length': 78
     }
-    super(MonochromeProgressIndicator, self).__init__(cases, templates)
+    super(MonochromeProgressIndicator, self).__init__(cases, flaky_tests_mode, templates)
 
   def ClearLine(self, last_line_length):
     print ("\r" + (" " * last_line_length) + "\r"),
@@ -459,6 +495,7 @@ class TestOutput(object):
     self.command = command
     self.output = output
     self.store_unexpected_output = store_unexpected_output
+    self.diagnostic = []
 
   def UnexpectedOutput(self):
     if self.HasCrashed():
@@ -731,7 +768,8 @@ FLAGS = {
 TIMEOUT_SCALEFACTOR = {
     'armv6' : { 'debug' : 12, 'release' : 3 },  # The ARM buildbots are slow.
     'arm'   : { 'debug' :  8, 'release' : 2 },
-    'ia32'  : { 'debug' :  4, 'release' : 1 } }
+    'ia32'  : { 'debug' :  4, 'release' : 1 },
+    'ppc'   : { 'debug' :  4, 'release' : 1 } }
 
 
 class Context(object):
@@ -748,20 +786,20 @@ class Context(object):
 
   def GetVm(self, arch, mode):
     if arch == 'none':
-      name = 'out/Debug/iojs' if mode == 'debug' else 'out/Release/iojs'
+      name = 'out/Debug/node' if mode == 'debug' else 'out/Release/node'
     else:
-      name = 'out/%s.%s/iojs' % (arch, mode)
+      name = 'out/%s.%s/node' % (arch, mode)
 
     # Currently GYP does not support output_dir for MSVS.
     # http://code.google.com/p/gyp/issues/detail?id=40
-    # It will put the builds into Release/iojs.exe or Debug/iojs.exe
+    # It will put the builds into Release/node.exe or Debug/node.exe
     if utils.IsWindows():
       out_dir = os.path.join(dirname(__file__), "..", "out")
       if not exists(out_dir):
         if mode == 'debug':
-          name = os.path.abspath('Debug/iojs.exe')
+          name = os.path.abspath('Debug/node.exe')
         else:
-          name = os.path.abspath('Release/iojs.exe')
+          name = os.path.abspath('Release/node.exe')
       else:
         name = os.path.abspath(name + '.exe')
 
@@ -773,8 +811,8 @@ class Context(object):
   def GetTimeout(self, mode):
     return self.timeout * TIMEOUT_SCALEFACTOR[ARCH_GUESS or 'ia32'][mode]
 
-def RunTestCases(cases_to_run, progress, tasks):
-  progress = PROGRESS_INDICATORS[progress](cases_to_run)
+def RunTestCases(cases_to_run, progress, tasks, flaky_tests_mode):
+  progress = PROGRESS_INDICATORS[progress](cases_to_run, flaky_tests_mode)
   return progress.Run(tasks)
 
 
@@ -798,7 +836,8 @@ OKAY = 'okay'
 TIMEOUT = 'timeout'
 CRASH = 'crash'
 SLOW = 'slow'
-
+FLAKY = 'flaky'
+DONTCARE = 'dontcare'
 
 class Expression(object):
   pass
@@ -1246,6 +1285,9 @@ def BuildOptions():
       default=False, action="store_true")
   result.add_option("--cat", help="Print the source of the tests",
       default=False, action="store_true")
+  result.add_option("--flaky-tests",
+      help="Regard tests marked as flaky (run|skip|dontcare)",
+      default="run")
   result.add_option("--warn-unused", help="Report unused rules",
       default=False, action="store_true")
   result.add_option("-j", help="The number of parallel tasks to run",
@@ -1259,12 +1301,15 @@ def BuildOptions():
   result.add_option("--no-suppress-dialogs", help="Display Windows dialogs for crashing tests",
         dest="suppress_dialogs", action="store_false")
   result.add_option("--shell", help="Path to V8 shell", default="shell")
-  result.add_option("--store-unexpected-output", 
+  result.add_option("--store-unexpected-output",
       help="Store the temporary JS files from tests that fails",
       dest="store_unexpected_output", default=True, action="store_true")
-  result.add_option("--no-store-unexpected-output", 
+  result.add_option("--no-store-unexpected-output",
       help="Deletes the temporary JS files from tests that fails",
       dest="store_unexpected_output", action="store_false")
+  result.add_option("-r", "--run",
+      help="Divide the tests in m groups (interleaved) and run tests from group n (--run=n,m with n < m)",
+      default="")
   return result
 
 
@@ -1273,8 +1318,29 @@ def ProcessOptions(options):
   VERBOSE = options.verbose
   options.arch = options.arch.split(',')
   options.mode = options.mode.split(',')
+  options.run = options.run.split(',')
+  if options.run == [""]:
+    options.run = None
+  elif len(options.run) != 2:
+    print "The run argument must be two comma-separated integers."
+    return False
+  else:
+    try:
+      options.run = map(int, options.run)
+    except ValueError:
+      print "Could not parse the integers from the run argument."
+      return False
+    if options.run[0] < 0 or options.run[1] < 0:
+      print "The run argument cannot have negative integers."
+      return False
+    if options.run[0] >= options.run[1]:
+      print "The test group to run (n) must be smaller than number of groups (m)."
+      return False
   if options.J:
     options.j = multiprocessing.cpu_count()
+  if options.flaky_tests not in ["run", "skip", "dontcare"]:
+    print "Unknown flaky-tests mode %s" % options.flaky_tests
+    return False
   return True
 
 
@@ -1369,7 +1435,7 @@ def Main():
   logger.addHandler(ch)
   logger.setLevel(logging.INFO)
   if options.logfile:
-    fh = logging.FileHandler(options.logfile)
+    fh = logging.FileHandler(options.logfile, mode='wb')
     logger.addHandler(fh)
 
   workspace = abspath(join(dirname(sys.argv[0]), '..'))
@@ -1477,15 +1543,26 @@ def Main():
 
   result = None
   def DoSkip(case):
-    return SKIP in case.outcomes or SLOW in case.outcomes
+    if SKIP in case.outcomes or SLOW in case.outcomes:
+      return True
+    return FLAKY in case.outcomes and options.flaky_tests == SKIP
   cases_to_run = [ c for c in all_cases if not DoSkip(c) ]
+  if options.run is not None:
+    # Must ensure the list of tests is sorted before selecting, to avoid
+    # silent errors if this file is changed to list the tests in a way that
+    # can be different in different machines
+    cases_to_run.sort(key=lambda c: (c.case.arch, c.case.mode, c.case.file))
+    cases_to_run = [ cases_to_run[i] for i
+                     in xrange(options.run[0],
+                               len(cases_to_run),
+                               options.run[1]) ]
   if len(cases_to_run) == 0:
     print "No tests to run."
     return 1
   else:
     try:
       start = time.time()
-      if RunTestCases(cases_to_run, options.progress, options.j):
+      if RunTestCases(cases_to_run, options.progress, options.j, options.flaky_tests):
         result = 0
       else:
         result = 1

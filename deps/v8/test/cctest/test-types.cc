@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// TODO(mythria): Remove this define after this flag is turned on globally
+#define V8_IMMINENT_DEPRECATION_WARNINGS
+
 #include <vector>
 
 #include "src/hydrogen-types.h"
-#include "src/isolate-inl.h"
 #include "src/types.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/types-fuzz.h"
@@ -106,7 +108,7 @@ struct Tests : Rep {
   TypesInstance T;
 
   Tests()
-      : isolate(CcTest::i_isolate()),
+      : isolate(CcTest::InitIsolateOnce()),
         scope(isolate),
         zone(),
         T(Rep::ToRegion(&zone, isolate), isolate,
@@ -1018,16 +1020,18 @@ struct Tests : Rep {
     CheckUnordered(T.InternalizedString, T.Symbol);
 
     CheckSub(T.Object, T.Receiver);
-    CheckSub(T.Array, T.Object);
     CheckSub(T.Proxy, T.Receiver);
-    CheckUnordered(T.Object, T.Proxy);
+    CheckSub(T.OtherObject, T.Object);
+    CheckSub(T.Undetectable, T.Object);
+    CheckSub(T.OtherObject, T.Object);
 
+    CheckUnordered(T.Object, T.Proxy);
+    CheckUnordered(T.OtherObject, T.Undetectable);
 
     // Subtyping between concrete structural types
 
     CheckSub(T.ObjectClass, T.Object);
-    CheckSub(T.ArrayClass, T.Object);
-    CheckSub(T.ArrayClass, T.Array);
+    CheckSub(T.ArrayClass, T.OtherObject);
     CheckSub(T.UninitializedClass, T.Internal);
     CheckUnordered(T.ObjectClass, T.ArrayClass);
     CheckUnordered(T.UninitializedClass, T.Null);
@@ -1039,7 +1043,8 @@ struct Tests : Rep {
     CheckSub(T.ObjectConstant1, T.Object);
     CheckSub(T.ObjectConstant2, T.Object);
     CheckSub(T.ArrayConstant, T.Object);
-    CheckSub(T.ArrayConstant, T.Array);
+    CheckSub(T.ArrayConstant, T.OtherObject);
+    CheckSub(T.ArrayConstant, T.Receiver);
     CheckSub(T.UninitializedConstant, T.Internal);
     CheckUnordered(T.ObjectConstant1, T.ObjectConstant2);
     CheckUnordered(T.ObjectConstant1, T.ArrayConstant);
@@ -1052,7 +1057,8 @@ struct Tests : Rep {
     CheckUnordered(T.ObjectConstant2, T.ArrayClass);
     CheckUnordered(T.ArrayConstant, T.ObjectClass);
 
-    CheckSub(T.NumberArray, T.Array);
+    CheckSub(T.NumberArray, T.OtherObject);
+    CheckSub(T.NumberArray, T.Receiver);
     CheckSub(T.NumberArray, T.Object);
     CheckUnordered(T.StringArray, T.AnyArray);
 
@@ -1341,7 +1347,7 @@ struct Tests : Rep {
     CheckDisjoint(T.String, T.Symbol);
     CheckDisjoint(T.InternalizedString, T.Symbol);
     CheckOverlap(T.Object, T.Receiver);
-    CheckOverlap(T.Array, T.Object);
+    CheckOverlap(T.OtherObject, T.Object);
     CheckOverlap(T.Proxy, T.Receiver);
     CheckDisjoint(T.Object, T.Proxy);
 
@@ -1357,14 +1363,14 @@ struct Tests : Rep {
     CheckOverlap(T.ObjectConstant1, T.Object);
     CheckOverlap(T.ObjectConstant2, T.Object);
     CheckOverlap(T.ArrayConstant, T.Object);
-    CheckOverlap(T.ArrayConstant, T.Array);
+    CheckOverlap(T.ArrayConstant, T.Receiver);
     CheckOverlap(T.ObjectConstant1, T.ObjectConstant1);
     CheckDisjoint(T.ObjectConstant1, T.ObjectConstant2);
     CheckDisjoint(T.ObjectConstant1, T.ArrayConstant);
-    CheckDisjoint(T.ObjectConstant1, T.ArrayClass);
-    CheckDisjoint(T.ObjectConstant2, T.ArrayClass);
-    CheckDisjoint(T.ArrayConstant, T.ObjectClass);
-    CheckOverlap(T.NumberArray, T.Array);
+    CheckOverlap(T.ObjectConstant1, T.ArrayClass);
+    CheckOverlap(T.ObjectConstant2, T.ArrayClass);
+    CheckOverlap(T.ArrayConstant, T.ObjectClass);
+    CheckOverlap(T.NumberArray, T.Receiver);
     CheckDisjoint(T.NumberArray, T.AnyArray);
     CheckDisjoint(T.NumberArray, T.StringArray);
     CheckOverlap(T.MethodFunction, T.Object);
@@ -1496,6 +1502,7 @@ struct Tests : Rep {
   void Union3() {
     // Monotonicity: T1->Is(T2) or T1->Is(T3) implies T1->Is(Union(T2, T3))
     for (TypeIterator it1 = T.types.begin(); it1 != T.types.end(); ++it1) {
+      HandleScope scope(isolate);
       for (TypeIterator it2 = T.types.begin(); it2 != T.types.end(); ++it2) {
         for (TypeIterator it3 = it2; it3 != T.types.end(); ++it3) {
           TypeHandle type1 = *it1;
@@ -1511,28 +1518,28 @@ struct Tests : Rep {
   void Union4() {
     // Class-class
     CheckSub(T.Union(T.ObjectClass, T.ArrayClass), T.Object);
-    CheckUnordered(T.Union(T.ObjectClass, T.ArrayClass), T.Array);
-    CheckOverlap(T.Union(T.ObjectClass, T.ArrayClass), T.Array);
+    CheckOverlap(T.Union(T.ObjectClass, T.ArrayClass), T.OtherObject);
+    CheckOverlap(T.Union(T.ObjectClass, T.ArrayClass), T.Receiver);
     CheckDisjoint(T.Union(T.ObjectClass, T.ArrayClass), T.Number);
 
     // Constant-constant
     CheckSub(T.Union(T.ObjectConstant1, T.ObjectConstant2), T.Object);
-    CheckUnordered(T.Union(T.ObjectConstant1, T.ArrayConstant), T.Array);
+    CheckOverlap(T.Union(T.ObjectConstant1, T.ArrayConstant), T.OtherObject);
     CheckUnordered(
         T.Union(T.ObjectConstant1, T.ObjectConstant2), T.ObjectClass);
-    CheckOverlap(
-        T.Union(T.ObjectConstant1, T.ArrayConstant), T.Array);
+    CheckOverlap(T.Union(T.ObjectConstant1, T.ArrayConstant), T.OtherObject);
     CheckDisjoint(
         T.Union(T.ObjectConstant1, T.ArrayConstant), T.Number);
     CheckOverlap(
         T.Union(T.ObjectConstant1, T.ArrayConstant), T.ObjectClass);  // !!!
 
     // Bitset-array
-    CHECK(this->IsBitset(T.Union(T.AnyArray, T.Array)));
+    CHECK(this->IsBitset(T.Union(T.AnyArray, T.Receiver)));
     CHECK(this->IsUnion(T.Union(T.NumberArray, T.Number)));
 
-    CheckEqual(T.Union(T.AnyArray, T.Array), T.Array);
-    CheckUnordered(T.Union(T.AnyArray, T.String), T.Array);
+    CheckEqual(T.Union(T.AnyArray, T.Receiver), T.Receiver);
+    CheckEqual(T.Union(T.AnyArray, T.OtherObject), T.OtherObject);
+    CheckUnordered(T.Union(T.AnyArray, T.String), T.Receiver);
     CheckOverlap(T.Union(T.NumberArray, T.String), T.Object);
     CheckDisjoint(T.Union(T.NumberArray, T.String), T.Number);
 
@@ -1548,27 +1555,26 @@ struct Tests : Rep {
     // Bitset-class
     CheckSub(T.Union(T.ObjectClass, T.SignedSmall),
              T.Union(T.Object, T.Number));
-    CheckSub(T.Union(T.ObjectClass, T.Array), T.Object);
-    CheckUnordered(T.Union(T.ObjectClass, T.String), T.Array);
+    CheckSub(T.Union(T.ObjectClass, T.OtherObject), T.Object);
+    CheckUnordered(T.Union(T.ObjectClass, T.String), T.OtherObject);
     CheckOverlap(T.Union(T.ObjectClass, T.String), T.Object);
     CheckDisjoint(T.Union(T.ObjectClass, T.String), T.Number);
 
     // Bitset-constant
     CheckSub(
         T.Union(T.ObjectConstant1, T.Signed32), T.Union(T.Object, T.Number));
-    CheckSub(T.Union(T.ObjectConstant1, T.Array), T.Object);
-    CheckUnordered(T.Union(T.ObjectConstant1, T.String), T.Array);
+    CheckSub(T.Union(T.ObjectConstant1, T.OtherObject), T.Object);
+    CheckUnordered(T.Union(T.ObjectConstant1, T.String), T.OtherObject);
     CheckOverlap(T.Union(T.ObjectConstant1, T.String), T.Object);
     CheckDisjoint(T.Union(T.ObjectConstant1, T.String), T.Number);
 
     // Class-constant
     CheckSub(T.Union(T.ObjectConstant1, T.ArrayClass), T.Object);
     CheckUnordered(T.ObjectClass, T.Union(T.ObjectConstant1, T.ArrayClass));
-    CheckSub(
-        T.Union(T.ObjectConstant1, T.ArrayClass), T.Union(T.Array, T.Object));
+    CheckSub(T.Union(T.ObjectConstant1, T.ArrayClass),
+             T.Union(T.Receiver, T.Object));
     CheckUnordered(T.Union(T.ObjectConstant1, T.ArrayClass), T.ArrayConstant);
-    CheckDisjoint(
-        T.Union(T.ObjectConstant1, T.ArrayClass), T.ObjectConstant2);
+    CheckOverlap(T.Union(T.ObjectConstant1, T.ArrayClass), T.ObjectConstant2);
     CheckOverlap(
         T.Union(T.ObjectConstant1, T.ArrayClass), T.ObjectClass);  // !!!
 
@@ -1603,7 +1609,7 @@ struct Tests : Rep {
     CheckEqual(
         T.Union(T.AnyArray, T.Union(T.NumberArray, T.AnyArray)),
         T.Union(T.AnyArray, T.NumberArray));
-    CheckSub(T.Union(T.AnyArray, T.NumberArray), T.Array);
+    CheckSub(T.Union(T.AnyArray, T.NumberArray), T.OtherObject);
 
     // Function-union
     CheckEqual(
@@ -1618,8 +1624,8 @@ struct Tests : Rep {
             T.Union(T.ObjectConstant1, T.ObjectConstant2)),
         T.Union(T.ObjectConstant2, T.ObjectConstant1));
     CheckEqual(T.Union(T.Union(T.Number, T.ArrayClass),
-                       T.Union(T.SignedSmall, T.Array)),
-               T.Union(T.Number, T.Array));
+                       T.Union(T.SignedSmall, T.Receiver)),
+               T.Union(T.Number, T.Receiver));
   }
 
   void Intersect() {
@@ -1749,6 +1755,7 @@ struct Tests : Rep {
 
     // Monotonicity: T1->Is(T2) and T1->Is(T3) implies T1->Is(Intersect(T2, T3))
     for (TypeIterator it1 = T.types.begin(); it1 != T.types.end(); ++it1) {
+      HandleScope scope(isolate);
       for (TypeIterator it2 = T.types.begin(); it2 != T.types.end(); ++it2) {
         for (TypeIterator it3 = T.types.begin(); it3 != T.types.end(); ++it3) {
           TypeHandle type1 = *it1;
@@ -1763,7 +1770,6 @@ struct Tests : Rep {
 
     // Bitset-class
     CheckEqual(T.Intersect(T.ObjectClass, T.Object), T.ObjectClass);
-    CheckEqual(T.Semantic(T.Intersect(T.ObjectClass, T.Array)), T.None);
     CheckEqual(T.Semantic(T.Intersect(T.ObjectClass, T.Number)), T.None);
 
     // Bitset-array
@@ -1784,7 +1790,7 @@ struct Tests : Rep {
 
     // Class-constant
     CHECK(T.Intersect(T.ObjectConstant1, T.ObjectClass)->IsInhabited());  // !!!
-    CHECK(!T.Intersect(T.ArrayClass, T.ObjectConstant2)->IsInhabited());
+    CHECK(T.Intersect(T.ArrayClass, T.ObjectConstant2)->IsInhabited());
 
     // Array-union
     CheckEqual(
@@ -1834,13 +1840,11 @@ struct Tests : Rep {
 
     // Union-union
     CheckEqual(T.Intersect(T.Union(T.Number, T.ArrayClass),
-                           T.Union(T.SignedSmall, T.Array)),
+                           T.Union(T.SignedSmall, T.Receiver)),
                T.Union(T.SignedSmall, T.ArrayClass));
-    CheckEqual(
-        T.Intersect(
-            T.Union(T.Number, T.ObjectClass),
-            T.Union(T.Signed32, T.Array)),
-        T.Signed32);
+    CheckEqual(T.Intersect(T.Union(T.Number, T.ObjectClass),
+                           T.Union(T.Signed32, T.OtherObject)),
+               T.Union(T.Signed32, T.ObjectClass));
     CheckEqual(
         T.Intersect(
             T.Union(T.ObjectConstant2, T.ObjectConstant1),
@@ -1964,199 +1968,171 @@ typedef Tests<Type, Type*, Zone, ZoneRep> ZoneTests;
 typedef Tests<HeapType, Handle<HeapType>, Isolate, HeapRep> HeapTests;
 
 
-TEST(IsSomeType) {
-  CcTest::InitializeVM();
-  ZoneTests().IsSomeType();
-  HeapTests().IsSomeType();
-}
+TEST(IsSomeType_zone) { ZoneTests().IsSomeType(); }
 
 
-TEST(PointwiseRepresentation) {
-  CcTest::InitializeVM();
-  // ZoneTests().PointwiseRepresentation();
-  HeapTests().PointwiseRepresentation();
-}
+TEST(IsSomeType_heap) { HeapTests().IsSomeType(); }
 
 
-TEST(BitsetType) {
-  CcTest::InitializeVM();
-  ZoneTests().Bitset();
-  HeapTests().Bitset();
-}
+TEST(PointwiseRepresentation_zone) { ZoneTests().PointwiseRepresentation(); }
 
 
-TEST(ClassType) {
-  CcTest::InitializeVM();
-  ZoneTests().Class();
-  HeapTests().Class();
-}
+TEST(PointwiseRepresentation_heap) { HeapTests().PointwiseRepresentation(); }
 
 
-TEST(ConstantType) {
-  CcTest::InitializeVM();
-  ZoneTests().Constant();
-  HeapTests().Constant();
-}
+TEST(BitsetType_zone) { ZoneTests().Bitset(); }
 
 
-TEST(RangeType) {
-  CcTest::InitializeVM();
-  ZoneTests().Range();
-  HeapTests().Range();
-}
+TEST(BitsetType_heap) { HeapTests().Bitset(); }
 
 
-TEST(ArrayType) {
-  CcTest::InitializeVM();
-  ZoneTests().Array();
-  HeapTests().Array();
-}
+TEST(ClassType_zone) { ZoneTests().Class(); }
 
 
-TEST(FunctionType) {
-  CcTest::InitializeVM();
-  ZoneTests().Function();
-  HeapTests().Function();
-}
+TEST(ClassType_heap) { HeapTests().Class(); }
 
 
-TEST(Of) {
-  CcTest::InitializeVM();
-  ZoneTests().Of();
-  HeapTests().Of();
-}
+TEST(ConstantType_zone) { ZoneTests().Constant(); }
 
 
-TEST(NowOf) {
-  CcTest::InitializeVM();
-  ZoneTests().NowOf();
-  HeapTests().NowOf();
-}
+TEST(ConstantType_heap) { HeapTests().Constant(); }
 
 
-TEST(MinMax) {
-  CcTest::InitializeVM();
-  ZoneTests().MinMax();
-  HeapTests().MinMax();
-}
+TEST(RangeType_zone) { ZoneTests().Range(); }
 
 
-TEST(BitsetGlb) {
-  CcTest::InitializeVM();
-  ZoneTests().BitsetGlb();
-  HeapTests().BitsetGlb();
-}
+TEST(RangeType_heap) { HeapTests().Range(); }
 
 
-TEST(BitsetLub) {
-  CcTest::InitializeVM();
-  ZoneTests().BitsetLub();
-  HeapTests().BitsetLub();
-}
+TEST(ArrayType_zone) { ZoneTests().Array(); }
 
 
-TEST(Is1) {
-  CcTest::InitializeVM();
-  ZoneTests().Is1();
-  HeapTests().Is1();
-}
+TEST(ArrayType_heap) { HeapTests().Array(); }
 
 
-TEST(Is2) {
-  CcTest::InitializeVM();
-  ZoneTests().Is2();
-  HeapTests().Is2();
-}
+TEST(FunctionType_zone) { ZoneTests().Function(); }
 
 
-TEST(NowIs) {
-  CcTest::InitializeVM();
-  ZoneTests().NowIs();
-  HeapTests().NowIs();
-}
+TEST(FunctionType_heap) { HeapTests().Function(); }
 
 
-TEST(Contains) {
-  CcTest::InitializeVM();
-  ZoneTests().Contains();
-  HeapTests().Contains();
-}
+TEST(Of_zone) { ZoneTests().Of(); }
 
 
-TEST(NowContains) {
-  CcTest::InitializeVM();
-  ZoneTests().NowContains();
-  HeapTests().NowContains();
-}
+TEST(Of_heap) { HeapTests().Of(); }
 
 
-TEST(Maybe) {
-  CcTest::InitializeVM();
-  ZoneTests().Maybe();
-  HeapTests().Maybe();
-}
+TEST(NowOf_zone) { ZoneTests().NowOf(); }
 
 
-TEST(Union1) {
-  CcTest::InitializeVM();
-  ZoneTests().Union1();
-  HeapTests().Union1();
-}
+TEST(NowOf_heap) { HeapTests().NowOf(); }
 
 
-/*
-TEST(Union2) {
-  CcTest::InitializeVM();
-  ZoneTests().Union2();
-  HeapTests().Union2();
-}
-*/
+TEST(MinMax_zone) { ZoneTests().MinMax(); }
 
 
-TEST(Union3) {
-  CcTest::InitializeVM();
-  ZoneTests().Union3();
-  HeapTests().Union3();
-}
+TEST(MinMax_heap) { HeapTests().MinMax(); }
 
 
-TEST(Union4) {
-  CcTest::InitializeVM();
-  ZoneTests().Union4();
-  HeapTests().Union4();
-}
+TEST(BitsetGlb_zone) { ZoneTests().BitsetGlb(); }
 
 
-TEST(Intersect) {
-  CcTest::InitializeVM();
-  ZoneTests().Intersect();
-  HeapTests().Intersect();
-}
+TEST(BitsetGlb_heap) { HeapTests().BitsetGlb(); }
 
 
-TEST(Distributivity) {
-  CcTest::InitializeVM();
-  ZoneTests().Distributivity();
-  HeapTests().Distributivity();
-}
+TEST(BitsetLub_zone) { ZoneTests().BitsetLub(); }
 
 
-TEST(GetRange) {
-  CcTest::InitializeVM();
-  ZoneTests().GetRange();
-  HeapTests().GetRange();
-}
+TEST(BitsetLub_heap) { HeapTests().BitsetLub(); }
 
 
-TEST(Convert) {
-  CcTest::InitializeVM();
+TEST(Is1_zone) { ZoneTests().Is1(); }
+
+
+TEST(Is1_heap) { HeapTests().Is1(); }
+
+
+TEST(Is2_zone) { ZoneTests().Is2(); }
+
+
+TEST(Is2_heap) { HeapTests().Is2(); }
+
+
+TEST(NowIs_zone) { ZoneTests().NowIs(); }
+
+
+TEST(NowIs_heap) { HeapTests().NowIs(); }
+
+
+TEST(Contains_zone) { ZoneTests().Contains(); }
+
+
+TEST(Contains_heap) { HeapTests().Contains(); }
+
+
+TEST(NowContains_zone) { ZoneTests().NowContains(); }
+
+
+TEST(NowContains_heap) { HeapTests().NowContains(); }
+
+
+TEST(Maybe_zone) { ZoneTests().Maybe(); }
+
+
+TEST(Maybe_heap) { HeapTests().Maybe(); }
+
+
+TEST(Union1_zone) { ZoneTests().Union1(); }
+
+
+TEST(Union1_heap) { HeapTests().Union1(); }
+
+
+TEST(Union2_zone) { ZoneTests().Union2(); }
+
+
+TEST(Union2_heap) { HeapTests().Union2(); }
+
+
+TEST(Union3_zone) { ZoneTests().Union3(); }
+
+
+TEST(Union3_heap) { HeapTests().Union3(); }
+
+
+TEST(Union4_zone) { ZoneTests().Union4(); }
+
+
+TEST(Union4_heap) { HeapTests().Union4(); }
+
+
+TEST(Intersect_zone) { ZoneTests().Intersect(); }
+
+
+TEST(Intersect_heap) { HeapTests().Intersect(); }
+
+
+TEST(Distributivity_zone) { ZoneTests().Distributivity(); }
+
+
+TEST(Distributivity_heap) { HeapTests().Distributivity(); }
+
+
+TEST(GetRange_zone) { ZoneTests().GetRange(); }
+
+
+TEST(GetRange_heap) { HeapTests().GetRange(); }
+
+
+TEST(Convert_zone) {
   ZoneTests().Convert<HeapType, Handle<HeapType>, Isolate, HeapRep>();
-  HeapTests().Convert<Type, Type*, Zone, ZoneRep>();
 }
 
 
-TEST(HTypeFromType) {
-  CcTest::InitializeVM();
-  ZoneTests().HTypeFromType();
-  HeapTests().HTypeFromType();
-}
+TEST(Convert_heap) { HeapTests().Convert<Type, Type*, Zone, ZoneRep>(); }
+
+
+TEST(HTypeFromType_zone) { ZoneTests().HTypeFromType(); }
+
+
+TEST(HTypeFromType_heap) { HeapTests().HTypeFromType(); }

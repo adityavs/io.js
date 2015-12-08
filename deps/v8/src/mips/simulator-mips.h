@@ -175,24 +175,38 @@ class Simulator {
   double get_fpu_register_double(int fpureg) const;
   void set_fcsr_bit(uint32_t cc, bool value);
   bool test_fcsr_bit(uint32_t cc);
+  void set_fcsr_rounding_mode(FPURoundingMode mode);
+  unsigned int get_fcsr_rounding_mode();
   bool set_fcsr_round_error(double original, double rounded);
-
+  bool set_fcsr_round_error(float original, float rounded);
+  bool set_fcsr_round64_error(double original, double rounded);
+  bool set_fcsr_round64_error(float original, float rounded);
+  void round_according_to_fcsr(double toRound, double& rounded,
+                               int32_t& rounded_int, double fs);
+  void round_according_to_fcsr(float toRound, float& rounded,
+                               int32_t& rounded_int, float fs);
+  void round64_according_to_fcsr(double toRound, double& rounded,
+                                 int64_t& rounded_int, double fs);
+  void round64_according_to_fcsr(float toRound, float& rounded,
+                                 int64_t& rounded_int, float fs);
   // Special case of set_register and get_register to access the raw PC value.
   void set_pc(int32_t value);
   int32_t get_pc() const;
 
-  Address get_sp() {
+  Address get_sp() const {
     return reinterpret_cast<Address>(static_cast<intptr_t>(get_register(sp)));
   }
 
   // Accessor to the internal simulator stack area.
-  uintptr_t StackLimit() const;
+  uintptr_t StackLimit(uintptr_t c_limit) const;
 
   // Executes MIPS instructions until the PC reaches end_sim_pc.
   void Execute();
 
   // Call on program start.
   static void Initialize(Isolate* isolate);
+
+  static void TearDown(HashMap* i_cache, Redirection* first);
 
   // V8 generally calls into generated JS code with 5 parameters and into
   // generated RegExp code with 7 parameters. This is a convenience function,
@@ -254,6 +268,20 @@ class Simulator {
   inline double ReadD(int32_t addr, Instruction* instr);
   inline void WriteD(int32_t addr, double value, Instruction* instr);
 
+  // Helpers for data value tracing.
+  enum TraceType {
+    BYTE,
+    HALF,
+    WORD
+    // DWORD,
+    // DFLOAT - Floats may have printing issues due to paired lwc1's
+  };
+
+  void TraceRegWr(int32_t value);
+  void TraceMemWr(int32_t addr, int32_t value, TraceType t);
+  void TraceMemRd(int32_t addr, int32_t value);
+  EmbeddedVector<char, 128> trace_buf_;
+
   // Operations depending on endianness.
   // Get Double Higher / Lower word.
   inline int32_t GetDoubleHIW(double* addr);
@@ -265,14 +293,51 @@ class Simulator {
   // Executing is handled based on the instruction type.
   void DecodeTypeRegister(Instruction* instr);
 
-  // Helper function for DecodeTypeRegister.
-  void ConfigureTypeRegister(Instruction* instr,
-                             int32_t* alu_out,
-                             int64_t* i64hilo,
-                             uint64_t* u64hilo,
-                             int32_t* next_pc,
-                             int32_t* return_addr_reg,
-                             bool* do_interrupt);
+  // Functions called from DecodeTypeRegister.
+  void DecodeTypeRegisterCOP1();
+
+  void DecodeTypeRegisterCOP1X();
+
+  void DecodeTypeRegisterSPECIAL();
+
+  void DecodeTypeRegisterSPECIAL2();
+
+  void DecodeTypeRegisterSPECIAL3();
+
+  // Called from DecodeTypeRegisterCOP1.
+  void DecodeTypeRegisterSRsType();
+
+  void DecodeTypeRegisterDRsType();
+
+  void DecodeTypeRegisterWRsType();
+
+  void DecodeTypeRegisterLRsType();
+
+  Instruction* currentInstr_;
+  inline Instruction* get_instr() const { return currentInstr_; }
+  inline void set_instr(Instruction* instr) { currentInstr_ = instr; }
+
+  inline int32_t rs_reg() const { return currentInstr_->RsValue(); }
+  inline int32_t rs() const { return get_register(rs_reg()); }
+  inline uint32_t rs_u() const {
+    return static_cast<uint32_t>(get_register(rs_reg()));
+  }
+  inline int32_t rt_reg() const { return currentInstr_->RtValue(); }
+  inline int32_t rt() const { return get_register(rt_reg()); }
+  inline uint32_t rt_u() const {
+    return static_cast<uint32_t>(get_register(rt_reg()));
+  }
+  inline int32_t rd_reg() const { return currentInstr_->RdValue(); }
+  inline int32_t fr_reg() const { return currentInstr_->FrValue(); }
+  inline int32_t fs_reg() const { return currentInstr_->FsValue(); }
+  inline int32_t ft_reg() const { return currentInstr_->FtValue(); }
+  inline int32_t fd_reg() const { return currentInstr_->FdValue(); }
+  inline int32_t sa() const { return currentInstr_->SaValue(); }
+
+  inline void SetResult(int32_t rd_reg, int32_t alu_out) {
+    set_register(rd_reg, alu_out);
+    TraceRegWr(alu_out);
+  }
 
   void DecodeTypeImmediate(Instruction* instr);
   void DecodeTypeJump(Instruction* instr);
@@ -308,6 +373,7 @@ class Simulator {
                instr->OpcodeValue());
     }
     InstructionDecode(instr);
+    SNPrintF(trace_buf_, " ");
   }
 
   // ICache.
@@ -323,10 +389,9 @@ class Simulator {
     kDivideByZero,
     kNumExceptions
   };
-  int16_t exceptions[kNumExceptions];
 
   // Exceptions.
-  void SignalExceptions();
+  void SignalException(Exception e);
 
   // Runtime call support.
   static void* RedirectExternalReference(void* external_function,
@@ -353,7 +418,7 @@ class Simulator {
   static const size_t stack_size_ = 1 * 1024*1024;
   char* stack_;
   bool pc_modified_;
-  int icount_;
+  uint64_t icount_;
   int break_count_;
 
   // Debugger input.
@@ -395,15 +460,14 @@ class Simulator {
 
 
 // The simulator has its own stack. Thus it has a different stack limit from
-// the C-based native code.  Setting the c_limit to indicate a very small
-// stack cause stack overflow errors, since the simulator ignores the input.
-// This is unlikely to be an issue in practice, though it might cause testing
-// trouble down the line.
+// the C-based native code.  The JS-based limit normally points near the end of
+// the simulator stack.  When the C-based limit is exhausted we reflect that by
+// lowering the JS-based limit as well, to make stack checks trigger.
 class SimulatorStack : public v8::internal::AllStatic {
  public:
   static inline uintptr_t JsLimitFromCLimit(Isolate* isolate,
                                             uintptr_t c_limit) {
-    return Simulator::current(isolate)->StackLimit();
+    return Simulator::current(isolate)->StackLimit(c_limit);
   }
 
   static inline uintptr_t RegisterCTryCatch(uintptr_t try_catch_address) {

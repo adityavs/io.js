@@ -10,21 +10,25 @@ namespace node {
 class TCPWrap : public StreamWrap {
  public:
   static v8::Local<v8::Object> Instantiate(Environment* env, AsyncWrap* parent);
-  static void Initialize(v8::Handle<v8::Object> target,
-                         v8::Handle<v8::Value> unused,
-                         v8::Handle<v8::Context> context);
+  static void Initialize(v8::Local<v8::Object> target,
+                         v8::Local<v8::Value> unused,
+                         v8::Local<v8::Context> context);
 
   uv_tcp_t* UVHandle();
 
   size_t self_size() const override { return sizeof(*this); }
 
  private:
-  TCPWrap(Environment* env, v8::Handle<v8::Object> object, AsyncWrap* parent);
+  typedef uv_tcp_t HandleType;
+
+  template <typename T,
+            int (*F)(const typename T::HandleType*, sockaddr*, int*)>
+  friend void GetSockOrPeerName(const v8::FunctionCallbackInfo<v8::Value>&);
+
+  TCPWrap(Environment* env, v8::Local<v8::Object> object, AsyncWrap* parent);
   ~TCPWrap();
 
   static void New(const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void GetSockName(const v8::FunctionCallbackInfo<v8::Value>& args);
-  static void GetPeerName(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetNoDelay(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void SetKeepAlive(const v8::FunctionCallbackInfo<v8::Value>& args);
   static void Bind(const v8::FunctionCallbackInfo<v8::Value>& args);

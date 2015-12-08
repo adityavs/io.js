@@ -1,31 +1,16 @@
 'use strict';
-var common = require('../common');
-var assert = require('assert');
+const common = require('../common');
+const assert = require('assert');
 
-var spawnSync = require('child_process').spawnSync;
+const spawnSync = require('child_process').spawnSync;
 
-var TIMER = 100;
-var SLEEP = 1000;
-
-var timeout = 0;
-
-setTimeout(function() {
-  timeout = process.hrtime(start);
-  assert.ok(stop, 'timer should not fire before process exits');
-  assert.strictEqual(timeout[0], 1, 'timer should take as long as sleep');
-}, TIMER);
-
-console.log('sleep started');
-var start = process.hrtime();
-var ret = spawnSync('sleep', ['1']);
-var stop = process.hrtime(start);
+// Echo does different things on Windows and Unix, but in both cases, it does
+// more-or-less nothing if there are no parameters
+const ret = spawnSync('sleep', ['0']);
 assert.strictEqual(ret.status, 0, 'exit status should be zero');
-console.log('sleep exited', stop);
-assert.strictEqual(stop[0], 1,
-                   'sleep should not take longer or less than 1 second');
 
 // Error test when command does not exist
-var ret_err = spawnSync('command_does_not_exist', ['bar']).error;
+const ret_err = spawnSync('command_does_not_exist', ['bar']).error;
 
 assert.strictEqual(ret_err.code, 'ENOENT');
 assert.strictEqual(ret_err.errno, 'ENOENT');
@@ -38,7 +23,7 @@ assert.deepEqual(ret_err.spawnargs, ['bar']);
   var response;
   var cwd;
 
-  if (process.platform === 'win32') {
+  if (common.isWindows) {
     cwd = 'c:\\';
     response = spawnSync('cmd.exe', ['/c', 'cd'], {cwd: cwd});
   } else {

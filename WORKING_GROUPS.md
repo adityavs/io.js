@@ -1,11 +1,11 @@
-# io.js Working Groups
+# Node.js Working Groups
 
-io.js Working Groups are autonomous projects created by the
-[Technical Committee (TC)](https://github.com/nodejs/io.js/blob/master/GOVERNANCE.md#technical-committee).
+Node.js Working Groups are autonomous projects created by the
+[Technical Steering Committee (TSC)](https://github.com/nodejs/node/blob/master/GOVERNANCE.md#technical-committee).
 
-Working Groups can be formed at any time but must be ratified by the TC.
+Working Groups can be formed at any time but must be ratified by the TSC.
 Once formed the work defined in the Working Group charter is the
-responsibility of the WG rather than the TC.
+responsibility of the WG rather than the TSC.
 
 It is important that Working Groups are not formed pre-maturely. Working
 Groups are not formed to *begin* a set of tasks but instead are formed
@@ -14,7 +14,7 @@ think it would benefit from being done as an autonomous project.
 
 If the work defined in a Working Group charter is completed the Working
 Group should be dissolved and the responsibility for governance absorbed
-back in to the TC.
+back in to the TSC.
 
 ## Current Working Groups
 
@@ -27,36 +27,43 @@ back in to the TC.
 * [Roadmap](#roadmap)
 * [Docker](#docker)
 * [Addon API](#addon-api)
+* [Benchmarking](#benchmarking)
+* [Post-mortem](#post-mortem)
+* [Intl](#intl)
+* [HTTP](#http)
+
+#### Process:
+
 * [Starting a Working Group](#starting-a-wg)
 * [Bootstrap Governance](#bootstrap-governance)
 
 ### [Website](https://github.com/nodejs/website)
 
 The website working group's purpose is to build and maintain a public
-website for the `io.js` project.
+website for the `Node.js` project.
 
 Its responsibilities are:
-* Develop and maintain a build and automation system for `iojs.org`.
-* Ensure the site is regularly updated with changes made to `io.js` like
+* Develop and maintain a build and automation system for `nodejs.org`.
+* Ensure the site is regularly updated with changes made to `Node.js` like
 releases and features.
 * Foster and enable a community of translators.
 
 ### [Streams](https://github.com/nodejs/readable-stream)
 
 The Streams WG is dedicated to the support and improvement of the Streams API
-as used in io.js and the npm ecosystem. We seek to create a composable API that
+as used in Node.js and the npm ecosystem. We seek to create a composable API that
 solves the problem of representing multiple occurrences of an event over time
 in a humane, low-overhead fashion. Improvements to the API will be driven by
 the needs of the ecosystem; interoperability and backwards compatibility with
 other solutions and prior versions are paramount in importance. Our
 responsibilities include:
 
-* Addressing stream issues on the io.js issue tracker.
-* Authoring and editing stream documentation within the io.js project.
-* Reviewing changes to stream subclasses within the io.js project.
-* Redirecting changes to streams from the io.js project to this project.
-* Assisting in the implementation of stream providers within io.js.
-* Recommending versions of readable-stream to be included in io.js.
+* Addressing stream issues on the Node.js issue tracker.
+* Authoring and editing stream documentation within the Node.js project.
+* Reviewing changes to stream subclasses within the Node.js project.
+* Redirecting changes to streams from the Node.js project to this project.
+* Assisting in the implementation of stream providers within Node.js.
+* Recommending versions of readable-stream to be included in Node.js.
 * Messaging about the future of streams to give the community advance notice of changes.
 
 
@@ -75,7 +82,7 @@ Its responsibilities are:
 ### [Tracing](https://github.com/nodejs/tracing-wg)
 
 The tracing working group's purpose is to increase the
-transparency of software written in io.js.
+transparency of software written in Node.js.
 
 Its responsibilities are:
 * Collaboration with V8 to integrate with `trace_event`.
@@ -95,56 +102,69 @@ language community might then produce multiple localizations for
 various project resources.
 
 Their responsibilities are:
-* Translations of any io.js materials they believe are relevant to their
+* Translations of any Node.js materials they believe are relevant to their
 community.
 * Review processes for keeping translations up
 to date and of high quality.
 * Social media channels in their language.
-* Promotion of io.js speakers for meetups and conferences in their
+* Promotion of Node.js speakers for meetups and conferences in their
 language.
+
+Note that the i18n working groups are distinct from the [Intl](#Intl) working group.
 
 Each language community maintains its own membership.
 
-* [iojs-ar - Arabic (اللغة العربية)](https://github.com/nodejs/iojs-ar)
-* [iojs-bg - Bulgarian (български език)](https://github.com/nodejs/iojs-bg)
-* [iojs-bn - Bengali (বাংলা)](https://github.com/nodejs/iojs-bn)
-* [iojs-cn - Chinese (中文)](https://github.com/nodejs/iojs-cn)
-* [iojs-cs - Czech (Český Jazyk)](https://github.com/nodejs/iojs-cs)
-* [iojs-da - Danish (Dansk)](https://github.com/nodejs/iojs-da)
-* [iojs-de - German (Deutsch)](https://github.com/nodejs/iojs-de)
-* [iojs-el - Greek (Ελληνικά)](https://github.com/nodejs/iojs-el)
-* [iojs-es - Spanish (Español)](https://github.com/nodejs/iojs-es)
-* [iojs-fa - Persian (فارسی)](https://github.com/nodejs/iojs-fa)
-* [iojs-fi - Finnish (Suomi)](https://github.com/nodejs/iojs-fi)
-* [iojs-fr - French (Français)](https://github.com/nodejs/iojs-fr)
-* [iojs-he - Hebrew (עברית)](https://github.com/nodejs/iojs-he)
-* [iojs-hi - Hindi (फिजी बात)](https://github.com/nodejs/iojs-hi)
-* [iojs-hu - Hungarian (Magyar)](https://github.com/nodejs/iojs-hu)
-* [iojs-id - Indonesian (Bahasa Indonesia)](https://github.com/nodejs/iojs-id)
-* [iojs-it - Italian (Italiano)](https://github.com/nodejs/iojs-it)
-* [iojs-ja - Japanese (日本語)](https://github.com/nodejs/iojs-ja)
-* [iojs-ka - Georgian (ქართული)](https://github.com/nodejs/iojs-ka)
-* [iojs-ko - Korean (조선말)](https://github.com/nodejs/iojs-ko)
-* [iojs-mk - Macedonian (Mакедонски)](https://github.com/nodejs/iojs-mk)
-* [iojs-ms - Malay (بهاس ملايو)](https://github.com/nodejs/iojs-ms)
-* [iojs-nl - Dutch (Nederlands)](https://github.com/nodejs/iojs-nl)
-* [iojs-no - Norwegian (Norsk)](https://github.com/nodejs/iojs-no)
-* [iojs-pl - Polish (Język Polski)](https://github.com/nodejs/iojs-pl)
-* [iojs-pt - Portuguese (Português)](https://github.com/nodejs/iojs-pt)
-* [iojs-ro - Romanian (Română)](https://github.com/nodejs/iojs-ro)
-* [iojs-ru - Russian (Русский)](https://github.com/nodejs/iojs-ru)
-* [iojs-sv - Swedish (Svenska)](https://github.com/nodejs/iojs-sv)
-* [iojs-ta - Tamil (தமிழ்)](https://github.com/nodejs/iojs-ta)
-* [iojs-tr - Turkish (Türkçe)](https://github.com/nodejs/iojs-tr)
-* [iojs-tw - Taiwanese (Hō-ló)](https://github.com/nodejs/iojs-tw)
-* [iojs-uk - Ukrainian (Українська)](https://github.com/nodejs/iojs-uk)
-* [iojs-vi - Vietnamese (Tiếng Việtnam)](https://github.com/nodejs/iojs-vi)
+* [nodejs-ar - Arabic (اللغة العربية)](https://github.com/nodejs/nodejs-ar)
+* [nodejs-bg - Bulgarian (български език)](https://github.com/nodejs/nodejs-bg)
+* [nodejs-bn - Bengali (বাংলা)](https://github.com/nodejs/nodejs-bn)
+* [nodejs-zh-CN - Chinese (中文)](https://github.com/nodejs/nodejs-zh-CN)
+* [nodejs-cs - Czech (Český Jazyk)](https://github.com/nodejs/nodejs-cs)
+* [nodejs-da - Danish (Dansk)](https://github.com/nodejs/nodejs-da)
+* [nodejs-de - German (Deutsch)](https://github.com/nodejs/nodejs-de)
+* [nodejs-el - Greek (Ελληνικά)](https://github.com/nodejs/nodejs-el)
+* [nodejs-es - Spanish (Español)](https://github.com/nodejs/nodejs-es)
+* [nodejs-fa - Persian (فارسی)](https://github.com/nodejs/nodejs-fa)
+* [nodejs-fi - Finnish (Suomi)](https://github.com/nodejs/nodejs-fi)
+* [nodejs-fr - French (Français)](https://github.com/nodejs/nodejs-fr)
+* [nodejs-he - Hebrew (עברית)](https://github.com/nodejs/nodejs-he)
+* [nodejs-hi - Hindi (फिजी बात)](https://github.com/nodejs/nodejs-hi)
+* [nodejs-hu - Hungarian (Magyar)](https://github.com/nodejs/nodejs-hu)
+* [nodejs-id - Indonesian (Bahasa Indonesia)](https://github.com/nodejs/nodejs-id)
+* [nodejs-it - Italian (Italiano)](https://github.com/nodejs/nodejs-it)
+* [nodejs-ja - Japanese (日本語)](https://github.com/nodejs/nodejs-ja)
+* [nodejs-ka - Georgian (ქართული)](https://github.com/nodejs/nodejs-ka)
+* [nodejs-ko - Korean (조선말)](https://github.com/nodejs/nodejs-ko)
+* [nodejs-mk - Macedonian (Mакедонски)](https://github.com/nodejs/nodejs-mk)
+* [nodejs-ms - Malay (بهاس ملايو)](https://github.com/nodejs/nodejs-ms)
+* [nodejs-nl - Dutch (Nederlands)](https://github.com/nodejs/nodejs-nl)
+* [nodejs-no - Norwegian (Norsk)](https://github.com/nodejs/nodejs-no)
+* [nodejs-pl - Polish (Język Polski)](https://github.com/nodejs/nodejs-pl)
+* [nodejs-pt - Portuguese (Português)](https://github.com/nodejs/nodejs-pt)
+* [nodejs-ro - Romanian (Română)](https://github.com/nodejs/nodejs-ro)
+* [nodejs-ru - Russian (Русский)](https://github.com/nodejs/nodejs-ru)
+* [nodejs-sv - Swedish (Svenska)](https://github.com/nodejs/nodejs-sv)
+* [nodejs-ta - Tamil (தமிழ்)](https://github.com/nodejs/nodejs-ta)
+* [nodejs-tr - Turkish (Türkçe)](https://github.com/nodejs/nodejs-tr)
+* [nodejs-zh-TW - Taiwanese (Hō-ló)](https://github.com/nodejs/nodejs-zh-TW)
+* [nodejs-uk - Ukrainian (Українська)](https://github.com/nodejs/nodejs-uk)
+* [nodejs-vi - Vietnamese (Tiếng Việtnam)](https://github.com/nodejs/nodejs-vi)
 
+### [Intl](https://github.com/nodejs/Intl)
+
+The Intl Working Group is dedicated to support and improvement of
+Internationalization (i18n) and Localization (l10n) in Node. Its responsibilities are:
+
+1. Functionality & compliance (standards: ECMA, Unicode…)
+2. Support for Globalization and Internationalization issues that come up in the tracker
+3. Guidance and Best Practices
+4. Refinement of existing `Intl` implementation
+
+The Intl WG is not responsible for translation of content. That is the responsibility of the specific [i18n](#i18n) group for each language.
 
 ### [Evangelism](https://github.com/nodejs/evangelism)
 
 The evangelism working group promotes the accomplishments
-of io.js and lets the community know how they can get involved.
+of Node.js and lets the community know how they can get involved.
 
 Their responsibilities are:
 * Project messaging.
@@ -154,11 +174,24 @@ Their responsibilities are:
 * Publishing regular update summaries and other promotional
 content.
 
+### [HTTP](https://github.com/nodejs/http)
+
+The HTTP working group is chartered for the support and improvement of the
+HTTP implementation in Node. It's responsibilities are:
+
+* Addressing HTTP issues on the Node.js issue tracker.
+* Authoring and editing HTTP documentation within the Node.js project.
+* Reviewing changes to HTTP functionality within the Node.js project.
+* Working with the ecosystem of HTTP related module developers to evolve the
+  HTTP implementation and APIs in core.
+* Advising the CTC on all HTTP related issues and discussions.
+* Messaging about the future of HTTP to give the community advance notice of
+  changes.
 
 ### [Roadmap](https://github.com/nodejs/roadmap)
 
 The roadmap working group is responsible for user community outreach
-and the translation of their concerns into a plan of action for io.js.
+and the translation of their concerns into a plan of action for Node.js.
 
 The final [ROADMAP](./ROADMAP.md) document is still owned by the TC and requires
 the same approval for changes as any other project asset.
@@ -172,10 +205,10 @@ Their responsibilities are:
 ### [Docker](https://github.com/nodejs/docker-iojs)
 
 The Docker working group's purpose is to build, maintain, and improve official
-Docker images for the `io.js` project.
+Docker images for the `Node.js` project.
 
 Their responsibilities are:
-* Keep the official Docker images updated in line with new `io.js` releases.
+* Keep the official Docker images updated in line with new `Node.js` releases.
 * Decide and implement image improvements and/or fixes.
 * Maintain and improve the images' documentation.
 
@@ -184,9 +217,9 @@ Their responsibilities are:
 
 The Addon API Working Group is responsible for maintaining the NAN project and
 corresponding _nan_ package in npm. The NAN project makes available an
-abstraction layer for native add-on authors for both Node.js and io.js,
+abstraction layer for native add-on authors for both Node.js and Node.js,
 assisting in the writing of code that is compatible with many actively used
-versions of Node.js, io.js, V8 and libuv.
+versions of Node.js, Node.js, V8 and libuv.
 
 Their responsibilities are:
 
@@ -194,16 +227,48 @@ Their responsibilities are:
   including code, issues and documentation.
 * Maintaining the [addon-examples](https://github.com/nodejs/node-addon-examples)
   GitHub repository, including code, issues and documentation.
-* Maintaining the C++ Addon API within the io.js project, in subordination to
-  the io.js TC.
-* Maintaining the Addon documentation within the io.js project, in
-  subordination to the io.js TC.
+* Maintaining the C++ Addon API within the Node.js project, in subordination to
+  the Node.js TSC.
+* Maintaining the Addon documentation within the Node.js project, in
+  subordination to the Node.js TSC.
 * Maintaining the _nan_ package in npm, releasing new versions as appropriate.
-* Messaging about the future of the io.js and NAN interface to give the
+* Messaging about the future of the Node.js and NAN interface to give the
   community advance notice of changes.
 
 The current members can be found in their
 [README](https://github.com/nodejs/nan#collaborators).
+
+### [Benchmarking](https://github.com/nodejs/benchmarking)
+
+The purpose of the Benchmark working group is to gain consensus
+for an agreed set of benchmarks that can be used to:
+
++ track and evangelize performance gains made between Node releases
++ avoid performance regressions between releases
+
+Its responsibilities are:
+
++ Identify 1 or more benchmarks that reflect customer usage.
+   Likely need more than one to cover typical Node use cases
+   including low-latency and high concurrency
++ Work to get community consensus on the list chosen
++ Add regular execution of chosen benchmarks to Node builds
++ Track/publicize performance between builds/releases
+
+### [Post-mortem](https://github.com/nodejs/post-mortem)
+
+The Post-mortem Diagnostics working group is dedicated to the support
+and improvement of postmortem debugging for Node.js. It seeks to
+elevate the role of postmortem debugging for Node, to assist in the
+development of techniques and tools, and to make techniques and tools
+known and available to Node.js users.
+
+Its responsibilities are:
+
++ Defining and adding interfaces/APIs in order to allow dumps
+  to be generated when needed
++ Defining and adding common structures to the dumps generated
+  in order to support tools that want to introspect those dumps
 
 ## Starting a WG
 
@@ -239,7 +304,7 @@ governance process, hence the term "bootstrap."
 
 ### *[insert WG name]* Working Group
 
-The io.js *[insert WG name]* is jointly governed by a Working Group (WG)
+The Node.js *[insert WG name]* is jointly governed by a Working Group (WG)
 that is responsible for high-level guidance of the project.
 
 The WG has final authority over this project including:

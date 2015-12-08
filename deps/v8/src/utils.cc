@@ -2,15 +2,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "src/utils.h"
+
 #include <stdarg.h>
 #include <sys/stat.h>
-
-#include "src/v8.h"
 
 #include "src/base/functional.h"
 #include "src/base/logging.h"
 #include "src/base/platform/platform.h"
-#include "src/utils.h"
 
 namespace v8 {
 namespace internal {
@@ -114,6 +113,15 @@ void PrintPID(const char* format, ...) {
 }
 
 
+void PrintIsolate(void* isolate, const char* format, ...) {
+  base::OS::Print("[%d:%p] ", base::OS::GetCurrentProcessId(), isolate);
+  va_list arguments;
+  va_start(arguments, format);
+  base::OS::VPrint(format, arguments);
+  va_end(arguments);
+}
+
+
 int SNPrintF(Vector<char> str, const char* format, ...) {
   va_list args;
   va_start(args, format);
@@ -203,7 +211,7 @@ char* ReadCharsFromFile(FILE* file,
   }
 
   // Get the size of the file and rewind it.
-  *size = ftell(file);
+  *size = static_cast<int>(ftell(file));
   rewind(file);
 
   char* result = NewArray<char>(*size + extra_space);
@@ -426,4 +434,5 @@ bool DoubleToBoolean(double d) {
 }
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

@@ -178,10 +178,30 @@ The "files" field is an array of files to include in your project.  If
 you name a folder in the array, then it will also include the files
 inside that folder. (Unless they would be ignored by another rule.)
 
-You can also provide a ".npmignore" file in the root of your package,
-which will keep files from being included, even if they would be picked
-up by the files array.  The ".npmignore" file works just like a
-".gitignore".
+You can also provide a ".npmignore" file in the root of your package or
+in subdirectories, which will keep files from being included, even
+if they would be picked up by the files array.  The `.npmignore` file
+works just like a `.gitignore`.
+
+Certain files are always included, regardless of settings:
+
+* `package.json`
+* `README` (and its variants)
+* `CHANGELOG` (and its variants)
+* `LICENSE` / `LICENCE`
+
+Conversely, some files are always ignored:
+
+* `.git`
+* `CVS`
+* `.svn`
+* `.hg`
+* `.lock-wscript`
+* `.wafpickle-N`
+* `*.swp`
+* `.DS_Store`
+* `._*`
+* `npm-debug.log`
 
 ## main
 
@@ -448,8 +468,8 @@ included.  For example:
 ## Local Paths
 
 As of version 2.0.0 you can provide a path to a local directory that contains a
-package. Local paths can be saved using `npm install --save`, using any of
-these forms:
+package. Local paths can be saved using `npm install -S` or
+`npm install --save`, using any of these forms:
 
     ../foo/bar
     ~/foo/bar
@@ -551,7 +571,7 @@ this. If you depend on features introduced in 1.5.2, use `">= 1.5.2 < 2"`.
 
 Array of package names that will be bundled when publishing the package.
 
-If this is spelled `"bundleDependencies"`, then that is also honorable.
+If this is spelled `"bundleDependencies"`, then that is also honored.
 
 ## optionalDependencies
 
@@ -606,17 +626,10 @@ field is advisory only.
 
 ## engineStrict
 
-**NOTE: This feature is deprecated and will be removed in npm 3.0.0.**
+**This feature was deprecated with npm 3.0.0**
 
-If you are sure that your module will *definitely not* run properly on
-versions of Node/npm other than those specified in the `engines` object,
-then you can set `"engineStrict": true` in your package.json file.
-This will override the user's `engine-strict` config setting.
-
-Please do not do this unless you are really very very sure.  If your
-engines object is something overly restrictive, you can quite easily and
-inadvertently lock yourself into obscurity and prevent your users from
-updating to new versions of Node.  Consider this choice carefully.
+Prior to npm 3.0.0, this feature was used to treat this package as if the
+user had set `engine-strict`.
 
 ## os
 
@@ -670,13 +683,13 @@ param at publish-time.
 
 ## publishConfig
 
-This is a set of config values that will be used at publish-time.  It's
-especially handy if you want to set the tag or registry, so that you can
-ensure that a given package is not tagged with "latest" or published to
-the global public registry by default.
+This is a set of config values that will be used at publish-time. It's
+especially handy if you want to set the tag, registry or access, so that
+you can ensure that a given package is not tagged with "latest", published
+to the global public registry or that a scoped module is private by default.
 
-Any config values can be overridden, but of course only "tag" and
-"registry" probably matter for the purposes of publishing.
+Any config values can be overridden, but of course only "tag", "registry" and
+"access" probably matter for the purposes of publishing.
 
 See `npm-config(7)` to see the list of config options that can be
 overridden.

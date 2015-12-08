@@ -64,13 +64,15 @@ class AstString : public ZoneObject {
 
 class AstRawString : public AstString {
  public:
-  int length() const OVERRIDE {
+  int length() const override {
     if (is_one_byte_)
       return literal_bytes_.length();
     return literal_bytes_.length() / 2;
   }
 
-  void Internalize(Isolate* isolate) OVERRIDE;
+  int byte_length() const { return literal_bytes_.length(); }
+
+  void Internalize(Isolate* isolate) override;
 
   bool AsArrayIndex(uint32_t* index) const;
 
@@ -92,9 +94,6 @@ class AstRawString : public AstString {
   uint32_t hash() const {
     return hash_;
   }
-  static bool Compare(void* a, void* b);
-
-  bool operator==(const AstRawString& rhs) const;
 
  private:
   friend class AstValueFactory;
@@ -122,9 +121,9 @@ class AstConsString : public AstString {
       : left_(left),
         right_(right) {}
 
-  int length() const OVERRIDE { return left_->length() + right_->length(); }
+  int length() const override { return left_->length() + right_->length(); }
 
-  void Internalize(Isolate* isolate) OVERRIDE;
+  void Internalize(Isolate* isolate) override;
 
  private:
   friend class AstValueFactory;
@@ -143,8 +142,10 @@ class AstValue : public ZoneObject {
   }
 
   bool IsNumber() const {
-    return type_ == NUMBER || type_ == SMI;
+    return type_ == NUMBER || type_ == NUMBER_WITH_DOT || type_ == SMI;
   }
+
+  bool ContainsDot() const { return type_ == NUMBER_WITH_DOT; }
 
   const AstRawString* AsString() const {
     if (type_ == STRING)
@@ -154,7 +155,7 @@ class AstValue : public ZoneObject {
   }
 
   double AsNumber() const {
-    if (type_ == NUMBER)
+    if (type_ == NUMBER || type_ == NUMBER_WITH_DOT)
       return number_;
     if (type_ == SMI)
       return smi_;
@@ -169,6 +170,8 @@ class AstValue : public ZoneObject {
   bool IsPropertyName() const;
 
   bool BooleanValue() const;
+
+  bool IsTheHole() const { return type_ == THE_HOLE; }
 
   void Internalize(Isolate* isolate);
 
@@ -188,6 +191,7 @@ class AstValue : public ZoneObject {
     STRING,
     SYMBOL,
     NUMBER,
+    NUMBER_WITH_DOT,
     SMI,
     BOOLEAN,
     NULL_TYPE,
@@ -199,7 +203,14 @@ class AstValue : public ZoneObject {
 
   explicit AstValue(const char* name) : type_(SYMBOL) { symbol_name_ = name; }
 
-  explicit AstValue(double n) : type_(NUMBER) { number_ = n; }
+  explicit AstValue(double n, bool with_dot) {
+    if (with_dot) {
+      type_ = NUMBER_WITH_DOT;
+    } else {
+      type_ = NUMBER;
+    }
+    number_ = n;
+  }
 
   AstValue(Type t, int i) : type_(t) {
     DCHECK(type_ == SMI);
@@ -230,37 +241,35 @@ class AstValue : public ZoneObject {
 
 
 // For generating constants.
-#define STRING_CONSTANTS(F)                             \
-  F(anonymous_function, "(anonymous function)")         \
-  F(arguments, "arguments")                             \
-  F(constructor, "constructor")                         \
-  F(done, "done")                                       \
-  F(dot, ".")                                           \
-  F(dot_for, ".for")                                    \
-  F(dot_generator, ".generator")                        \
-  F(dot_generator_object, ".generator_object")          \
-  F(dot_iterator, ".iterator")                          \
-  F(dot_module, ".module")                              \
-  F(dot_result, ".result")                              \
-  F(empty, "")                                          \
-  F(eval, "eval")                                       \
-  F(get_template_callsite, "GetTemplateCallSite")       \
-  F(initialize_const_global, "initializeConstGlobal")   \
-  F(initialize_var_global, "initializeVarGlobal")       \
-  F(is_construct_call, "_IsConstructCall")              \
-  F(let, "let")                                         \
-  F(make_reference_error, "MakeReferenceErrorEmbedded") \
-  F(make_syntax_error, "MakeSyntaxErrorEmbedded")       \
-  F(make_type_error, "MakeTypeErrorEmbedded")           \
-  F(native, "native")                                   \
-  F(new_target, "new.target")                           \
-  F(next, "next")                                       \
-  F(proto, "__proto__")                                 \
-  F(prototype, "prototype")                             \
-  F(this, "this")                                       \
-  F(use_asm, "use asm")                                 \
-  F(use_strong, "use strong")                           \
-  F(use_strict, "use strict")                           \
+#define STRING_CONSTANTS(F)                     \
+  F(anonymous_function, "(anonymous function)") \
+  F(arguments, "arguments")                     \
+  F(constructor, "constructor")                 \
+  F(default, "default")                         \
+  F(done, "done")                               \
+  F(dot, ".")                                   \
+  F(dot_for, ".for")                            \
+  F(dot_generator, ".generator")                \
+  F(dot_generator_object, ".generator_object")  \
+  F(dot_iterator, ".iterator")                  \
+  F(dot_module, ".module")                      \
+  F(dot_result, ".result")                      \
+  F(dot_switch_tag, ".switch_tag")              \
+  F(empty, "")                                  \
+  F(eval, "eval")                               \
+  F(let, "let")                                 \
+  F(native, "native")                           \
+  F(new_target, ".new.target")                  \
+  F(next, "next")                               \
+  F(proto, "__proto__")                         \
+  F(prototype, "prototype")                     \
+  F(rest_parameter, ".rest_parameter")          \
+  F(this, "this")                               \
+  F(this_function, ".this_function")            \
+  F(undefined, "undefined")                     \
+  F(use_asm, "use asm")                         \
+  F(use_strong, "use strong")                   \
+  F(use_strict, "use strict")                   \
   F(value, "value")
 
 #define OTHER_CONSTANTS(F) \
@@ -273,7 +282,7 @@ class AstValue : public ZoneObject {
 class AstValueFactory {
  public:
   AstValueFactory(Zone* zone, uint32_t hash_seed)
-      : string_table_(AstRawString::Compare),
+      : string_table_(AstRawStringCompare),
         zone_(zone),
         isolate_(NULL),
         hash_seed_(hash_seed) {
@@ -322,7 +331,7 @@ class AstValueFactory {
   const AstValue* NewString(const AstRawString* string);
   // A JavaScript symbol (ECMA-262 edition 6).
   const AstValue* NewSymbol(const char* name);
-  const AstValue* NewNumber(double number);
+  const AstValue* NewNumber(double number, bool with_dot = false);
   const AstValue* NewSmi(int number);
   const AstValue* NewBoolean(bool b);
   const AstValue* NewStringList(ZoneList<const AstRawString*>* strings);
@@ -335,6 +344,8 @@ class AstValueFactory {
   AstRawString* GetTwoByteStringInternal(Vector<const uint16_t> literal);
   AstRawString* GetString(uint32_t hash, bool is_one_byte,
                           Vector<const byte> literal_bytes);
+
+  static bool AstRawStringCompare(void* a, void* b);
 
   // All strings are copied here, one after another (no NULLs inbetween).
   HashMap string_table_;

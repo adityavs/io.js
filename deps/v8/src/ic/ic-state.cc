@@ -2,17 +2,16 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
+#include "src/ic/ic-state.h"
 
 #include "src/ic/ic.h"
-#include "src/ic/ic-state.h"
 
 namespace v8 {
 namespace internal {
 
 // static
 void ICUtility::Clear(Isolate* isolate, Address address,
-                      ConstantPoolArray* constant_pool) {
+                      Address constant_pool) {
   IC::Clear(isolate, address, constant_pool);
 }
 
@@ -45,18 +44,18 @@ STATIC_CONST_MEMBER_DEFINITION const int BinaryOpICState::LAST_TOKEN;
 
 
 BinaryOpICState::BinaryOpICState(Isolate* isolate, ExtraICState extra_ic_state)
-    : isolate_(isolate) {
+    : fixed_right_arg_(
+          HasFixedRightArgField::decode(extra_ic_state)
+              ? Just(1 << FixedRightArgValueField::decode(extra_ic_state))
+              : Nothing<int>()),
+      isolate_(isolate) {
   op_ =
       static_cast<Token::Value>(FIRST_TOKEN + OpField::decode(extra_ic_state));
-  fixed_right_arg_ =
-      Maybe<int>(HasFixedRightArgField::decode(extra_ic_state),
-                 1 << FixedRightArgValueField::decode(extra_ic_state));
+  strong_ = StrengthField::decode(extra_ic_state);
   left_kind_ = LeftKindField::decode(extra_ic_state);
-  if (fixed_right_arg_.has_value) {
-    right_kind_ = Smi::IsValid(fixed_right_arg_.value) ? SMI : INT32;
-  } else {
-    right_kind_ = RightKindField::decode(extra_ic_state);
-  }
+  right_kind_ = fixed_right_arg_.IsJust()
+                    ? (Smi::IsValid(fixed_right_arg_.FromJust()) ? SMI : INT32)
+                    : RightKindField::decode(extra_ic_state);
   result_kind_ = ResultKindField::decode(extra_ic_state);
   DCHECK_LE(FIRST_TOKEN, op_);
   DCHECK_LE(op_, LAST_TOKEN);
@@ -66,11 +65,11 @@ BinaryOpICState::BinaryOpICState(Isolate* isolate, ExtraICState extra_ic_state)
 ExtraICState BinaryOpICState::GetExtraICState() const {
   ExtraICState extra_ic_state =
       OpField::encode(op_ - FIRST_TOKEN) | LeftKindField::encode(left_kind_) |
-      ResultKindField::encode(result_kind_) |
-      HasFixedRightArgField::encode(fixed_right_arg_.has_value);
-  if (fixed_right_arg_.has_value) {
+      ResultKindField::encode(result_kind_) | StrengthField::encode(strong_) |
+      HasFixedRightArgField::encode(fixed_right_arg_.IsJust());
+  if (fixed_right_arg_.IsJust()) {
     extra_ic_state = FixedRightArgValueField::update(
-        extra_ic_state, WhichPowerOf2(fixed_right_arg_.value));
+        extra_ic_state, WhichPowerOf2(fixed_right_arg_.FromJust()));
   } else {
     extra_ic_state = RightKindField::update(extra_ic_state, right_kind_);
   }
@@ -87,9 +86,9 @@ void BinaryOpICState::GenerateAheadOfTime(
 // Generated list of commonly used stubs
 #define GENERATE(op, left_kind, right_kind, result_kind) \
   do {                                                   \
-    BinaryOpICState state(isolate, op);                  \
+    BinaryOpICState state(isolate, op, Strength::WEAK);  \
     state.left_kind_ = left_kind;                        \
-    state.fixed_right_arg_.has_value = false;            \
+    state.fixed_right_arg_ = Nothing<int>();             \
     state.right_kind_ = right_kind;                      \
     state.result_kind_ = result_kind;                    \
     Generate(isolate, state);                            \
@@ -189,10 +188,9 @@ void BinaryOpICState::GenerateAheadOfTime(
 #undef GENERATE
 #define GENERATE(op, left_kind, fixed_right_arg_value, result_kind) \
   do {                                                              \
-    BinaryOpICState state(isolate, op);                             \
+    BinaryOpICState state(isolate, op, Strength::WEAK);             \
     state.left_kind_ = left_kind;                                   \
-    state.fixed_right_arg_.has_value = true;                        \
-    state.fixed_right_arg_.value = fixed_right_arg_value;           \
+    state.fixed_right_arg_ = Just(fixed_right_arg_value);           \
     state.right_kind_ = SMI;                                        \
     state.result_kind_ = result_kind;                               \
     Generate(isolate, state);                                       \
@@ -224,9 +222,10 @@ Type* BinaryOpICState::GetResultType(Zone* zone) const {
 std::ostream& operator<<(std::ostream& os, const BinaryOpICState& s) {
   os << "(" << Token::Name(s.op_);
   if (s.CouldCreateAllocationMementos()) os << "_CreateAllocationMementos";
+  if (is_strong(s.strength())) os << "_Strong";
   os << ":" << BinaryOpICState::KindToString(s.left_kind_) << "*";
-  if (s.fixed_right_arg_.has_value) {
-    os << s.fixed_right_arg_.value;
+  if (s.fixed_right_arg_.IsJust()) {
+    os << s.fixed_right_arg_.FromJust();
   } else {
     os << BinaryOpICState::KindToString(s.right_kind_);
   }
@@ -248,9 +247,9 @@ void BinaryOpICState::Update(Handle<Object> left, Handle<Object> right,
       base::bits::IsPowerOfTwo32(fixed_right_arg_value) &&
       FixedRightArgValueField::is_valid(WhichPowerOf2(fixed_right_arg_value)) &&
       (left_kind_ == SMI || left_kind_ == INT32) &&
-      (result_kind_ == NONE || !fixed_right_arg_.has_value);
-  fixed_right_arg_ = Maybe<int32_t>(has_fixed_right_arg, fixed_right_arg_value);
-
+      (result_kind_ == NONE || !fixed_right_arg_.IsJust());
+  fixed_right_arg_ =
+      has_fixed_right_arg ? Just(fixed_right_arg_value) : Nothing<int32_t>();
   result_kind_ = UpdateKind(result, result_kind_);
 
   if (!Token::IsTruncatingBinaryOp(op_)) {
@@ -359,6 +358,8 @@ const char* CompareICState::GetStateName(State state) {
   switch (state) {
     case UNINITIALIZED:
       return "UNINITIALIZED";
+    case BOOLEAN:
+      return "BOOLEAN";
     case SMI:
       return "SMI";
     case NUMBER:
@@ -385,6 +386,8 @@ Type* CompareICState::StateToType(Zone* zone, State state, Handle<Map> map) {
   switch (state) {
     case UNINITIALIZED:
       return Type::None(zone);
+    case BOOLEAN:
+      return Type::Boolean(zone);
     case SMI:
       return Type::SignedSmall(zone);
     case NUMBER:
@@ -411,12 +414,16 @@ CompareICState::State CompareICState::NewInputState(State old_state,
                                                     Handle<Object> value) {
   switch (old_state) {
     case UNINITIALIZED:
+      if (value->IsBoolean()) return BOOLEAN;
       if (value->IsSmi()) return SMI;
       if (value->IsHeapNumber()) return NUMBER;
       if (value->IsInternalizedString()) return INTERNALIZED_STRING;
       if (value->IsString()) return STRING;
       if (value->IsSymbol()) return UNIQUE_NAME;
       if (value->IsJSObject()) return OBJECT;
+      break;
+    case BOOLEAN:
+      if (value->IsBoolean()) return BOOLEAN;
       break;
     case SMI:
       if (value->IsSmi()) return SMI;
@@ -455,6 +462,7 @@ CompareICState::State CompareICState::TargetState(
     bool has_inlined_smi_code, Handle<Object> x, Handle<Object> y) {
   switch (old_state) {
     case UNINITIALIZED:
+      if (x->IsBoolean() && y->IsBoolean()) return BOOLEAN;
       if (x->IsSmi() && y->IsSmi()) return SMI;
       if (x->IsNumber() && y->IsNumber()) return NUMBER;
       if (Token::IsOrderedRelationalCompareOp(op)) {
@@ -471,16 +479,16 @@ CompareICState::State CompareICState::TargetState(
         return Token::IsEqualityOp(op) ? INTERNALIZED_STRING : STRING;
       }
       if (x->IsString() && y->IsString()) return STRING;
-      if (!Token::IsEqualityOp(op)) return GENERIC;
-      if (x->IsUniqueName() && y->IsUniqueName()) return UNIQUE_NAME;
       if (x->IsJSObject() && y->IsJSObject()) {
         if (Handle<JSObject>::cast(x)->map() ==
             Handle<JSObject>::cast(y)->map()) {
           return KNOWN_OBJECT;
         } else {
-          return OBJECT;
+          return Token::IsEqualityOp(op) ? OBJECT : GENERIC;
         }
       }
+      if (!Token::IsEqualityOp(op)) return GENERIC;
+      if (x->IsUniqueName() && y->IsUniqueName()) return UNIQUE_NAME;
       return GENERIC;
     case SMI:
       return x->IsNumber() && y->IsNumber() ? NUMBER : GENERIC;
@@ -497,11 +505,11 @@ CompareICState::State CompareICState::TargetState(
       if (old_right == SMI && y->IsHeapNumber()) return NUMBER;
       return GENERIC;
     case KNOWN_OBJECT:
-      DCHECK(Token::IsEqualityOp(op));
       if (x->IsJSObject() && y->IsJSObject()) {
-        return OBJECT;
+        return Token::IsEqualityOp(op) ? OBJECT : GENERIC;
       }
       return GENERIC;
+    case BOOLEAN:
     case STRING:
     case UNIQUE_NAME:
     case OBJECT:
@@ -511,5 +519,6 @@ CompareICState::State CompareICState::TargetState(
   UNREACHABLE();
   return GENERIC;  // Make the compiler happy.
 }
-}
-}  // namespace v8::internal
+
+}  // namespace internal
+}  // namespace v8

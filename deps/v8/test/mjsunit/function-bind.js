@@ -25,6 +25,8 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// Flags: --allow-natives-syntax
+
 // Tests the Function.prototype.bind (ES 15.3.4.5) method.
 
 // Simple tests.
@@ -268,14 +270,18 @@ assertEquals([true, 0, undefined], s());
 
 // Check that property descriptors are correct (unconfigurable, unenumerable,
 // and both get and set is the ThrowTypeError function).
-var cdesc = Object.getOwnPropertyDescriptor(f, "caller");
-var adesc = Object.getOwnPropertyDescriptor(f, "arguments");
+//
+// Poisoned accessors are no longer own properties --- get them from the
+// prototype
+var f_proto = Object.getPrototypeOf(f);
+var cdesc = Object.getOwnPropertyDescriptor(f_proto, "caller");
+var adesc = Object.getOwnPropertyDescriptor(f_proto, "arguments");
 
 assertFalse(cdesc.enumerable);
-assertFalse(cdesc.configurable);
+assertTrue(cdesc.configurable);
 
 assertFalse(adesc.enumerable);
-assertFalse(adesc.configurable);
+assertTrue(adesc.configurable);
 
 assertSame(cdesc.get, cdesc.set);
 assertSame(cdesc.get, adesc.get);
@@ -294,3 +300,20 @@ assertThrows(function() { f.arguments = 42; }, TypeError);
 // the caller is strict and the callee isn't. A bound function is built-in,
 // but not considered strict.
 (function foo() { return foo.caller; }).bind()();
+
+
+(function TestProtoIsPreserved() {
+  function fun() {}
+
+  function proto() {}
+  Object.setPrototypeOf(fun, proto);
+  var bound = fun.bind({});
+  assertEquals(proto, Object.getPrototypeOf(bound));
+
+  var bound2 = fun.bind({});
+  assertTrue(%HaveSameMap(new bound, new bound2));
+
+  Object.setPrototypeOf(fun, null);
+  bound = Function.prototype.bind.call(fun, {});
+  assertEquals(null, Object.getPrototypeOf(bound));
+})();

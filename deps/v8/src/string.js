@@ -2,27 +2,39 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// This file relies on the fact that the following declaration has been made
-// in runtime.js:
-// var $String = global.String;
+(function(global, utils) {
+
+%CheckIsBootstrapping();
 
 // -------------------------------------------------------------------
+// Imports
 
-function StringConstructor(x) {
-  if (%_ArgumentsLength() == 0) x = '';
-  if (%_IsConstructCall()) {
-    %_SetValueOf(this, TO_STRING_INLINE(x));
-  } else {
-    return IS_SYMBOL(x) ?
-        %_CallFunction(x, SymbolToString) : TO_STRING_INLINE(x);
-  }
-}
+var ArrayIndexOf;
+var ArrayJoin;
+var GlobalRegExp = global.RegExp;
+var GlobalString = global.String;
+var InternalArray = utils.InternalArray;
+var InternalPackedArray = utils.InternalPackedArray;
+var RegExpExec;
+var RegExpExecNoTests;
+var RegExpLastMatchInfo;
+var ToNumber;
 
+utils.Import(function(from) {
+  ArrayIndexOf = from.ArrayIndexOf;
+  ArrayJoin = from.ArrayJoin;
+  RegExpExec = from.RegExpExec;
+  RegExpExecNoTests = from.RegExpExecNoTests;
+  RegExpLastMatchInfo = from.RegExpLastMatchInfo;
+  ToNumber = from.ToNumber;
+});
+
+//-------------------------------------------------------------------
 
 // ECMA-262 section 15.5.4.2
 function StringToString() {
   if (!IS_STRING(this) && !IS_STRING_WRAPPER(this)) {
-    throw new $TypeError('String.prototype.toString is not generic');
+    throw MakeTypeError(kNotGeneric, 'String.prototype.toString');
   }
   return %_ValueOf(this);
 }
@@ -31,31 +43,31 @@ function StringToString() {
 // ECMA-262 section 15.5.4.3
 function StringValueOf() {
   if (!IS_STRING(this) && !IS_STRING_WRAPPER(this)) {
-    throw new $TypeError('String.prototype.valueOf is not generic');
+    throw MakeTypeError(kNotGeneric, 'String.prototype.valueOf');
   }
   return %_ValueOf(this);
 }
 
 
 // ECMA-262, section 15.5.4.4
-function StringCharAt(pos) {
+function StringCharAtJS(pos) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.charAt");
 
   var result = %_StringCharAt(this, pos);
   if (%_IsSmi(result)) {
-    result = %_StringCharAt(TO_STRING_INLINE(this), TO_INTEGER(pos));
+    result = %_StringCharAt(TO_STRING(this), TO_INTEGER(pos));
   }
   return result;
 }
 
 
 // ECMA-262 section 15.5.4.5
-function StringCharCodeAt(pos) {
+function StringCharCodeAtJS(pos) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.charCodeAt");
 
   var result = %_StringCharCodeAt(this, pos);
   if (!%_IsSmi(result)) {
-    result = %_StringCharCodeAt(TO_STRING_INLINE(this), TO_INTEGER(pos));
+    result = %_StringCharCodeAt(TO_STRING(this), TO_INTEGER(pos));
   }
   return result;
 }
@@ -64,17 +76,16 @@ function StringCharCodeAt(pos) {
 // ECMA-262, section 15.5.4.6
 function StringConcat(other /* and more */) {  // length == 1
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.concat");
-
   var len = %_ArgumentsLength();
-  var this_as_string = TO_STRING_INLINE(this);
+  var this_as_string = TO_STRING(this);
   if (len === 1) {
-    return this_as_string + other;
+    return this_as_string + TO_STRING(other);
   }
   var parts = new InternalArray(len + 1);
   parts[0] = this_as_string;
   for (var i = 0; i < len; i++) {
     var part = %_Arguments(i);
-    parts[i + 1] = TO_STRING_INLINE(part);
+    parts[i + 1] = TO_STRING(part);
   }
   return %StringBuilderConcat(parts, len + 1, "");
 }
@@ -84,8 +95,8 @@ function StringConcat(other /* and more */) {  // length == 1
 function StringIndexOfJS(pattern /* position */) {  // length == 1
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.indexOf");
 
-  var subject = TO_STRING_INLINE(this);
-  pattern = TO_STRING_INLINE(pattern);
+  var subject = TO_STRING(this);
+  pattern = TO_STRING(pattern);
   var index = 0;
   if (%_ArgumentsLength() > 1) {
     index = %_Arguments(1);  // position
@@ -101,9 +112,9 @@ function StringIndexOfJS(pattern /* position */) {  // length == 1
 function StringLastIndexOfJS(pat /* position */) {  // length == 1
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.lastIndexOf");
 
-  var sub = TO_STRING_INLINE(this);
+  var sub = TO_STRING(this);
   var subLength = sub.length;
-  var pat = TO_STRING_INLINE(pat);
+  var pat = TO_STRING(pat);
   var patLength = pat.length;
   var index = subLength - patLength;
   if (%_ArgumentsLength() > 1) {
@@ -132,8 +143,7 @@ function StringLastIndexOfJS(pat /* position */) {  // length == 1
 function StringLocaleCompareJS(other) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.localeCompare");
 
-  return %StringLocaleCompare(TO_STRING_INLINE(this),
-                              TO_STRING_INLINE(other));
+  return %StringLocaleCompare(TO_STRING(this), TO_STRING(other));
 }
 
 
@@ -141,26 +151,21 @@ function StringLocaleCompareJS(other) {
 function StringMatchJS(regexp) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.match");
 
-  var subject = TO_STRING_INLINE(this);
+  var subject = TO_STRING(this);
   if (IS_REGEXP(regexp)) {
     // Emulate RegExp.prototype.exec's side effect in step 5, even though
     // value is discarded.
-    var lastIndex = regexp.lastIndex;
-    TO_INTEGER_FOR_SIDE_EFFECT(lastIndex);
+    var lastIndex = TO_INTEGER(regexp.lastIndex);
     if (!regexp.global) return RegExpExecNoTests(regexp, subject, 0);
-    // lastMatchInfo is defined in regexp.js.
-    var result = %StringMatch(subject, regexp, lastMatchInfo);
-    if (result !== null) lastMatchInfoOverride = null;
+    var result = %StringMatch(subject, regexp, RegExpLastMatchInfo);
+    if (result !== null) $regexpLastMatchInfoOverride = null;
     regexp.lastIndex = 0;
     return result;
   }
   // Non-regexp argument.
-  regexp = new $RegExp(regexp);
+  regexp = new GlobalRegExp(regexp);
   return RegExpExecNoTests(regexp, subject, 0);
 }
-
-
-var NORMALIZATION_FORMS = ['NFC', 'NFD', 'NFKC', 'NFKD'];
 
 
 // ECMA-262 v6, section 21.1.3.12
@@ -168,23 +173,28 @@ var NORMALIZATION_FORMS = ['NFC', 'NFD', 'NFKC', 'NFKD'];
 // For now we do nothing, as proper normalization requires big tables.
 // If Intl is enabled, then i18n.js will override it and provide the the
 // proper functionality.
-function StringNormalizeJS(form) {
+function StringNormalizeJS() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.normalize");
+  var s = TO_STRING(this);
 
-  var form = form ? TO_STRING_INLINE(form) : 'NFC';
-  var normalizationForm = NORMALIZATION_FORMS.indexOf(form);
+  var formArg = %_Arguments(0);
+  var form = IS_UNDEFINED(formArg) ? 'NFC' : TO_STRING(formArg);
+
+  var NORMALIZATION_FORMS = ['NFC', 'NFD', 'NFKC', 'NFKD'];
+  var normalizationForm =
+      %_CallFunction(NORMALIZATION_FORMS, form, ArrayIndexOf);
   if (normalizationForm === -1) {
-    throw new $RangeError('The normalization form should be one of '
-        + NORMALIZATION_FORMS.join(', ') + '.');
+    throw MakeRangeError(kNormalizationForm,
+                         %_CallFunction(NORMALIZATION_FORMS, ', ', ArrayJoin));
   }
 
-  return %_ValueOf(this);
+  return s;
 }
 
 
-// This has the same size as the lastMatchInfo array, and can be used for
-// functions that expect that structure to be returned.  It is used when the
-// needle is a string rather than a regexp.  In this case we can't update
+// This has the same size as the RegExpLastMatchInfo array, and can be used
+// for functions that expect that structure to be returned.  It is used when
+// the needle is a string rather than a regexp.  In this case we can't update
 // lastMatchArray without erroneously affecting the properties on the global
 // RegExp object.
 var reusableMatchInfo = [2, "", "", -1, -1];
@@ -194,7 +204,7 @@ var reusableMatchInfo = [2, "", "", -1, -1];
 function StringReplace(search, replace) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.replace");
 
-  var subject = TO_STRING_INLINE(this);
+  var subject = TO_STRING(this);
 
   // Decision tree for dispatch
   // .. regexp search
@@ -216,15 +226,14 @@ function StringReplace(search, replace) {
   if (IS_REGEXP(search)) {
     // Emulate RegExp.prototype.exec's side effect in step 5, even if
     // value is discarded.
-    var lastIndex = search.lastIndex;
-    TO_INTEGER_FOR_SIDE_EFFECT(lastIndex);
+    var lastIndex = TO_INTEGER(search.lastIndex);
 
-    if (!IS_SPEC_FUNCTION(replace)) {
-      replace = TO_STRING_INLINE(replace);
+    if (!IS_CALLABLE(replace)) {
+      replace = TO_STRING(replace);
 
       if (!search.global) {
         // Non-global regexp search, string replace.
-        var match = DoRegExpExec(search, subject, 0);
+        var match = RegExpExec(search, subject, 0);
         if (match == null) {
           search.lastIndex = 0
           return subject;
@@ -233,28 +242,28 @@ function StringReplace(search, replace) {
           return %_SubString(subject, 0, match[CAPTURE0]) +
                  %_SubString(subject, match[CAPTURE1], subject.length)
         }
-        return ExpandReplacement(replace, subject, lastMatchInfo,
+        return ExpandReplacement(replace, subject, RegExpLastMatchInfo,
                                  %_SubString(subject, 0, match[CAPTURE0])) +
                %_SubString(subject, match[CAPTURE1], subject.length);
       }
 
       // Global regexp search, string replace.
       search.lastIndex = 0;
-      if (lastMatchInfoOverride == null) {
+      if ($regexpLastMatchInfoOverride == null) {
         return %StringReplaceGlobalRegExpWithString(
-            subject, search, replace, lastMatchInfo);
+            subject, search, replace, RegExpLastMatchInfo);
       } else {
         // We use this hack to detect whether StringReplaceRegExpWithString
         // found at least one hit. In that case we need to remove any
         // override.
-        var saved_subject = lastMatchInfo[LAST_SUBJECT_INDEX];
-        lastMatchInfo[LAST_SUBJECT_INDEX] = 0;
+        var saved_subject = RegExpLastMatchInfo[LAST_SUBJECT_INDEX];
+        RegExpLastMatchInfo[LAST_SUBJECT_INDEX] = 0;
         var answer = %StringReplaceGlobalRegExpWithString(
-            subject, search, replace, lastMatchInfo);
-        if (%_IsSmi(lastMatchInfo[LAST_SUBJECT_INDEX])) {
-          lastMatchInfo[LAST_SUBJECT_INDEX] = saved_subject;
+            subject, search, replace, RegExpLastMatchInfo);
+        if (%_IsSmi(RegExpLastMatchInfo[LAST_SUBJECT_INDEX])) {
+          RegExpLastMatchInfo[LAST_SUBJECT_INDEX] = saved_subject;
         } else {
-          lastMatchInfoOverride = null;
+          $regexpLastMatchInfoOverride = null;
         }
         return answer;
       }
@@ -268,7 +277,7 @@ function StringReplace(search, replace) {
     return StringReplaceNonGlobalRegExpWithFunction(subject, search, replace);
   }
 
-  search = TO_STRING_INLINE(search);
+  search = TO_STRING(search);
 
   if (search.length == 1 &&
       subject.length > 0xFF &&
@@ -286,13 +295,12 @@ function StringReplace(search, replace) {
   var result = %_SubString(subject, 0, start);
 
   // Compute the string to replace with.
-  if (IS_SPEC_FUNCTION(replace)) {
-    var receiver = %GetDefaultReceiver(replace);
-    result += %_CallFunction(receiver, search, start, subject, replace);
+  if (IS_CALLABLE(replace)) {
+    result += replace(search, start, subject);
   } else {
     reusableMatchInfo[CAPTURE0] = start;
     reusableMatchInfo[CAPTURE1] = end;
-    result = ExpandReplacement(TO_STRING_INLINE(replace),
+    result = ExpandReplacement(TO_STRING(replace),
                                subject,
                                reusableMatchInfo,
                                result);
@@ -401,7 +409,7 @@ function CaptureString(string, lastCaptureInfo, index) {
 // TODO(lrn): This array will survive indefinitely if replace is never
 // called again. However, it will be empty, since the contents are cleared
 // in the finally block.
-var reusableReplaceArray = new InternalArray(16);
+var reusableReplaceArray = new InternalArray(4);
 
 // Helper function for replacing regular expressions with the result of a
 // function application in String.prototype.replace.
@@ -418,7 +426,7 @@ function StringReplaceGlobalRegExpWithFunction(subject, regexp, replace) {
   }
   var res = %RegExpExecMultiple(regexp,
                                 subject,
-                                lastMatchInfo,
+                                RegExpLastMatchInfo,
                                 resultArray);
   regexp.lastIndex = 0;
   if (IS_NULL(res)) {
@@ -427,7 +435,7 @@ function StringReplaceGlobalRegExpWithFunction(subject, regexp, replace) {
     return subject;
   }
   var len = res.length;
-  if (NUMBER_OF_CAPTURES(lastMatchInfo) == 2) {
+  if (NUMBER_OF_CAPTURES(RegExpLastMatchInfo) == 2) {
     // If the number of captures is two then there are no explicit captures in
     // the regexp, just the implicit capture that captures the whole match.  In
     // this case we can simplify quite a bit and end up with something faster.
@@ -436,7 +444,6 @@ function StringReplaceGlobalRegExpWithFunction(subject, regexp, replace) {
     // function.
     var match_start = 0;
     var override = new InternalPackedArray(null, 0, subject);
-    var receiver = %GetDefaultReceiver(replace);
     for (var i = 0; i < len; i++) {
       var elem = res[i];
       if (%_IsSmi(elem)) {
@@ -451,27 +458,25 @@ function StringReplaceGlobalRegExpWithFunction(subject, regexp, replace) {
       } else {
         override[0] = elem;
         override[1] = match_start;
-        lastMatchInfoOverride = override;
-        var func_result =
-            %_CallFunction(receiver, elem, match_start, subject, replace);
+        $regexpLastMatchInfoOverride = override;
+        var func_result = replace(elem, match_start, subject);
         // Overwrite the i'th element in the results with the string we got
         // back from the callback function.
-        res[i] = TO_STRING_INLINE(func_result);
+        res[i] = TO_STRING(func_result);
         match_start += elem.length;
       }
     }
   } else {
-    var receiver = %GetDefaultReceiver(replace);
     for (var i = 0; i < len; i++) {
       var elem = res[i];
       if (!%_IsSmi(elem)) {
         // elem must be an Array.
         // Use the apply argument as backing for global RegExp properties.
-        lastMatchInfoOverride = elem;
-        var func_result = %Apply(replace, receiver, elem, 0, elem.length);
+        $regexpLastMatchInfoOverride = elem;
+        var func_result = %Apply(replace, UNDEFINED, elem, 0, elem.length);
         // Overwrite the i'th element in the results with the string we got
         // back from the callback function.
-        res[i] = TO_STRING_INLINE(func_result);
+        res[i] = TO_STRING(func_result);
       }
     }
   }
@@ -483,7 +488,7 @@ function StringReplaceGlobalRegExpWithFunction(subject, regexp, replace) {
 
 
 function StringReplaceNonGlobalRegExpWithFunction(subject, regexp, replace) {
-  var matchInfo = DoRegExpExec(regexp, subject, 0);
+  var matchInfo = RegExpExec(regexp, subject, 0);
   if (IS_NULL(matchInfo)) {
     regexp.lastIndex = 0;
     return subject;
@@ -496,12 +501,11 @@ function StringReplaceNonGlobalRegExpWithFunction(subject, regexp, replace) {
   // The number of captures plus one for the match.
   var m = NUMBER_OF_CAPTURES(matchInfo) >> 1;
   var replacement;
-  var receiver = %GetDefaultReceiver(replace);
   if (m == 1) {
     // No captures, only the match, which is always valid.
     var s = %_SubString(subject, index, endOfMatch);
     // Don't call directly to avoid exposing the built-in global object.
-    replacement = %_CallFunction(receiver, s, index, subject, replace);
+    replacement = replace(s, index, subject);
   } else {
     var parameters = new InternalArray(m + 2);
     for (var j = 0; j < m; j++) {
@@ -510,7 +514,7 @@ function StringReplaceNonGlobalRegExpWithFunction(subject, regexp, replace) {
     parameters[j] = index;
     parameters[j + 1] = subject;
 
-    replacement = %Apply(replace, receiver, parameters, 0, j + 2);
+    replacement = %Apply(replace, UNDEFINED, parameters, 0, j + 2);
   }
 
   result += replacement;  // The add method converts to string if necessary.
@@ -525,14 +529,12 @@ function StringSearch(re) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.search");
 
   var regexp;
-  if (IS_STRING(re)) {
-    regexp = %_GetFromCache(STRING_TO_REGEXP_CACHE_ID, re);
-  } else if (IS_REGEXP(re)) {
+  if (IS_REGEXP(re)) {
     regexp = re;
   } else {
-    regexp = new $RegExp(re);
+    regexp = new GlobalRegExp(re);
   }
-  var match = DoRegExpExec(regexp, TO_STRING_INLINE(this), 0);
+  var match = RegExpExec(regexp, TO_STRING(this), 0);
   if (match) {
     return match[CAPTURE0];
   }
@@ -544,7 +546,7 @@ function StringSearch(re) {
 function StringSlice(start, end) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.slice");
 
-  var s = TO_STRING_INLINE(this);
+  var s = TO_STRING(this);
   var s_len = s.length;
   var start_i = TO_INTEGER(start);
   var end_i = s_len;
@@ -586,12 +588,12 @@ function StringSlice(start, end) {
 function StringSplitJS(separator, limit) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.split");
 
-  var subject = TO_STRING_INLINE(this);
+  var subject = TO_STRING(this);
   limit = (IS_UNDEFINED(limit)) ? 0xffffffff : TO_UINT32(limit);
 
   var length = subject.length;
   if (!IS_REGEXP(separator)) {
-    var separator_string = TO_STRING_INLINE(separator);
+    var separator_string = TO_STRING(separator);
 
     if (limit === 0) return [];
 
@@ -618,7 +620,7 @@ function StringSplitJS(separator, limit) {
 
 function StringSplitOnRegExp(subject, separator, limit, length) {
   if (length === 0) {
-    if (DoRegExpExec(separator, subject, 0, 0) != null) {
+    if (RegExpExec(separator, subject, 0, 0) != null) {
       return [];
     }
     return [subject];
@@ -637,7 +639,7 @@ function StringSplitOnRegExp(subject, separator, limit, length) {
       break;
     }
 
-    var matchInfo = DoRegExpExec(separator, subject, startIndex);
+    var matchInfo = RegExpExec(separator, subject, startIndex);
     if (matchInfo == null || length === (startMatch = matchInfo[CAPTURE0])) {
       result[result.length] = %_SubString(subject, currentIndex, length);
       break;
@@ -678,7 +680,7 @@ function StringSplitOnRegExp(subject, separator, limit, length) {
 function StringSubstring(start, end) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.subString");
 
-  var s = TO_STRING_INLINE(this);
+  var s = TO_STRING(this);
   var s_len = s.length;
 
   var start_i = TO_INTEGER(start);
@@ -711,7 +713,7 @@ function StringSubstring(start, end) {
 function StringSubstr(start, n) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.substr");
 
-  var s = TO_STRING_INLINE(this);
+  var s = TO_STRING(this);
   var len;
 
   // Correct n: If not given, set to string length; if explicitly
@@ -751,7 +753,7 @@ function StringSubstr(start, n) {
 function StringToLowerCaseJS() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLowerCase");
 
-  return %StringToLowerCase(TO_STRING_INLINE(this));
+  return %StringToLowerCase(TO_STRING(this));
 }
 
 
@@ -759,7 +761,7 @@ function StringToLowerCaseJS() {
 function StringToLocaleLowerCase() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLocaleLowerCase");
 
-  return %StringToLowerCase(TO_STRING_INLINE(this));
+  return %StringToLowerCase(TO_STRING(this));
 }
 
 
@@ -767,7 +769,7 @@ function StringToLocaleLowerCase() {
 function StringToUpperCaseJS() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.toUpperCase");
 
-  return %StringToUpperCase(TO_STRING_INLINE(this));
+  return %StringToUpperCase(TO_STRING(this));
 }
 
 
@@ -775,26 +777,26 @@ function StringToUpperCaseJS() {
 function StringToLocaleUpperCase() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.toLocaleUpperCase");
 
-  return %StringToUpperCase(TO_STRING_INLINE(this));
+  return %StringToUpperCase(TO_STRING(this));
 }
 
 // ES5, 15.5.4.20
 function StringTrimJS() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.trim");
 
-  return %StringTrim(TO_STRING_INLINE(this), true, true);
+  return %StringTrim(TO_STRING(this), true, true);
 }
 
 function StringTrimLeft() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.trimLeft");
 
-  return %StringTrim(TO_STRING_INLINE(this), true, false);
+  return %StringTrim(TO_STRING(this), true, false);
 }
 
 function StringTrimRight() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.trimRight");
 
-  return %StringTrim(TO_STRING_INLINE(this), false, true);
+  return %StringTrim(TO_STRING(this), false, true);
 }
 
 
@@ -830,156 +832,377 @@ function StringFromCharCode(code) {
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.2.1
 function HtmlEscape(str) {
-  return TO_STRING_INLINE(str).replace(/"/g, "&quot;");
+  return %_CallFunction(TO_STRING(str), /"/g, "&quot;", StringReplace);
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.2
 function StringAnchor(name) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.anchor");
-  return "<a name=\"" + HtmlEscape(name) + "\">" + this + "</a>";
+  return "<a name=\"" + HtmlEscape(name) + "\">" + TO_STRING(this) +
+         "</a>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.3
 function StringBig() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.big");
-  return "<big>" + this + "</big>";
+  return "<big>" + TO_STRING(this) + "</big>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.4
 function StringBlink() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.blink");
-  return "<blink>" + this + "</blink>";
+  return "<blink>" + TO_STRING(this) + "</blink>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.5
 function StringBold() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.bold");
-  return "<b>" + this + "</b>";
+  return "<b>" + TO_STRING(this) + "</b>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.6
 function StringFixed() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.fixed");
-  return "<tt>" + this + "</tt>";
+  return "<tt>" + TO_STRING(this) + "</tt>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.7
 function StringFontcolor(color) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.fontcolor");
-  return "<font color=\"" + HtmlEscape(color) + "\">" + this + "</font>";
+  return "<font color=\"" + HtmlEscape(color) + "\">" + TO_STRING(this) +
+         "</font>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.8
 function StringFontsize(size) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.fontsize");
-  return "<font size=\"" + HtmlEscape(size) + "\">" + this + "</font>";
+  return "<font size=\"" + HtmlEscape(size) + "\">" + TO_STRING(this) +
+         "</font>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.9
 function StringItalics() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.italics");
-  return "<i>" + this + "</i>";
+  return "<i>" + TO_STRING(this) + "</i>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.10
 function StringLink(s) {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.link");
-  return "<a href=\"" + HtmlEscape(s) + "\">" + this + "</a>";
+  return "<a href=\"" + HtmlEscape(s) + "\">" + TO_STRING(this) + "</a>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.11
 function StringSmall() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.small");
-  return "<small>" + this + "</small>";
+  return "<small>" + TO_STRING(this) + "</small>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.12
 function StringStrike() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.strike");
-  return "<strike>" + this + "</strike>";
+  return "<strike>" + TO_STRING(this) + "</strike>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.13
 function StringSub() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.sub");
-  return "<sub>" + this + "</sub>";
+  return "<sub>" + TO_STRING(this) + "</sub>";
 }
 
 
 // ES6 draft, revision 26 (2014-07-18), section B.2.3.14
 function StringSup() {
   CHECK_OBJECT_COERCIBLE(this, "String.prototype.sup");
-  return "<sup>" + this + "</sup>";
+  return "<sup>" + TO_STRING(this) + "</sup>";
+}
+
+// ES6 draft 01-20-14, section 21.1.3.13
+function StringRepeat(count) {
+  CHECK_OBJECT_COERCIBLE(this, "String.prototype.repeat");
+
+  var s = TO_STRING(this);
+  var n = TO_INTEGER(count);
+  // The maximum string length is stored in a smi, so a longer repeat
+  // must result in a range error.
+  if (n < 0 || n > %_MaxSmi()) throw MakeRangeError(kInvalidCountValue);
+
+  var r = "";
+  while (true) {
+    if (n & 1) r += s;
+    n >>= 1;
+    if (n === 0) return r;
+    s += s;
+  }
+}
+
+
+// ES6 draft 04-05-14, section 21.1.3.18
+function StringStartsWith(searchString /* position */) {  // length == 1
+  CHECK_OBJECT_COERCIBLE(this, "String.prototype.startsWith");
+
+  var s = TO_STRING(this);
+
+  if (IS_REGEXP(searchString)) {
+    throw MakeTypeError(kFirstArgumentNotRegExp, "String.prototype.startsWith");
+  }
+
+  var ss = TO_STRING(searchString);
+  var pos = 0;
+  if (%_ArgumentsLength() > 1) {
+    var arg = %_Arguments(1);  // position
+    if (!IS_UNDEFINED(arg)) {
+      pos = TO_INTEGER(arg);
+    }
+  }
+
+  var s_len = s.length;
+  if (pos < 0) pos = 0;
+  if (pos > s_len) pos = s_len;
+  var ss_len = ss.length;
+
+  if (ss_len + pos > s_len) {
+    return false;
+  }
+
+  for (var i = 0; i < ss_len; i++) {
+    if (%_StringCharCodeAt(s, pos + i) !== %_StringCharCodeAt(ss, i)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+
+// ES6 draft 04-05-14, section 21.1.3.7
+function StringEndsWith(searchString /* position */) {  // length == 1
+  CHECK_OBJECT_COERCIBLE(this, "String.prototype.endsWith");
+
+  var s = TO_STRING(this);
+
+  if (IS_REGEXP(searchString)) {
+    throw MakeTypeError(kFirstArgumentNotRegExp, "String.prototype.endsWith");
+  }
+
+  var ss = TO_STRING(searchString);
+  var s_len = s.length;
+  var pos = s_len;
+  if (%_ArgumentsLength() > 1) {
+    var arg = %_Arguments(1);  // position
+    if (!IS_UNDEFINED(arg)) {
+      pos = TO_INTEGER(arg);
+    }
+  }
+
+  if (pos < 0) pos = 0;
+  if (pos > s_len) pos = s_len;
+  var ss_len = ss.length;
+  pos = pos - ss_len;
+
+  if (pos < 0) {
+    return false;
+  }
+
+  for (var i = 0; i < ss_len; i++) {
+    if (%_StringCharCodeAt(s, pos + i) !== %_StringCharCodeAt(ss, i)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+
+// ES6 draft 04-05-14, section 21.1.3.6
+function StringIncludes(searchString /* position */) {  // length == 1
+  CHECK_OBJECT_COERCIBLE(this, "String.prototype.includes");
+
+  var string = TO_STRING(this);
+
+  if (IS_REGEXP(searchString)) {
+    throw MakeTypeError(kFirstArgumentNotRegExp, "String.prototype.includes");
+  }
+
+  searchString = TO_STRING(searchString);
+  var pos = 0;
+  if (%_ArgumentsLength() > 1) {
+    pos = %_Arguments(1);  // position
+    pos = TO_INTEGER(pos);
+  }
+
+  var stringLength = string.length;
+  if (pos < 0) pos = 0;
+  if (pos > stringLength) pos = stringLength;
+  var searchStringLength = searchString.length;
+
+  if (searchStringLength + pos > stringLength) {
+    return false;
+  }
+
+  return %StringIndexOf(string, searchString, pos) !== -1;
+}
+
+
+// ES6 Draft 05-22-2014, section 21.1.3.3
+function StringCodePointAt(pos) {
+  CHECK_OBJECT_COERCIBLE(this, "String.prototype.codePointAt");
+
+  var string = TO_STRING(this);
+  var size = string.length;
+  pos = TO_INTEGER(pos);
+  if (pos < 0 || pos >= size) {
+    return UNDEFINED;
+  }
+  var first = %_StringCharCodeAt(string, pos);
+  if (first < 0xD800 || first > 0xDBFF || pos + 1 == size) {
+    return first;
+  }
+  var second = %_StringCharCodeAt(string, pos + 1);
+  if (second < 0xDC00 || second > 0xDFFF) {
+    return first;
+  }
+  return (first - 0xD800) * 0x400 + second + 0x2400;
+}
+
+
+// ES6 Draft 05-22-2014, section 21.1.2.2
+function StringFromCodePoint(_) {  // length = 1
+  var code;
+  var length = %_ArgumentsLength();
+  var index;
+  var result = "";
+  for (index = 0; index < length; index++) {
+    code = %_Arguments(index);
+    if (!%_IsSmi(code)) {
+      code = ToNumber(code);
+    }
+    if (code < 0 || code > 0x10FFFF || code !== TO_INTEGER(code)) {
+      throw MakeRangeError(kInvalidCodePoint, code);
+    }
+    if (code <= 0xFFFF) {
+      result += %_StringCharFromCode(code);
+    } else {
+      code -= 0x10000;
+      result += %_StringCharFromCode((code >>> 10) & 0x3FF | 0xD800);
+      result += %_StringCharFromCode(code & 0x3FF | 0xDC00);
+    }
+  }
+  return result;
+}
+
+
+// -------------------------------------------------------------------
+// String methods related to templates
+
+// ES6 Draft 03-17-2015, section 21.1.2.4
+function StringRaw(callSite) {
+  // TODO(caitp): Use rest parameters when implemented
+  var numberOfSubstitutions = %_ArgumentsLength();
+  var cooked = TO_OBJECT(callSite);
+  var raw = TO_OBJECT(cooked.raw);
+  var literalSegments = TO_LENGTH(raw.length);
+  if (literalSegments <= 0) return "";
+
+  var result = TO_STRING(raw[0]);
+
+  for (var i = 1; i < literalSegments; ++i) {
+    if (i < numberOfSubstitutions) {
+      result += TO_STRING(%_Arguments(i));
+    }
+    result += TO_STRING(raw[i]);
+  }
+
+  return result;
 }
 
 // -------------------------------------------------------------------
 
-function SetUpString() {
-  %CheckIsBootstrapping();
+// Set the String function and constructor.
+%FunctionSetPrototype(GlobalString, new GlobalString());
 
-  // Set the String function and constructor.
-  %SetCode($String, StringConstructor);
-  %FunctionSetPrototype($String, new $String());
+// Set up the constructor property on the String prototype object.
+%AddNamedProperty(
+    GlobalString.prototype, "constructor", GlobalString, DONT_ENUM);
 
-  // Set up the constructor property on the String prototype object.
-  %AddNamedProperty($String.prototype, "constructor", $String, DONT_ENUM);
+// Set up the non-enumerable functions on the String object.
+utils.InstallFunctions(GlobalString, DONT_ENUM, [
+  "fromCharCode", StringFromCharCode,
+  "fromCodePoint", StringFromCodePoint,
+  "raw", StringRaw
+]);
 
-  // Set up the non-enumerable functions on the String object.
-  InstallFunctions($String, DONT_ENUM, $Array(
-    "fromCharCode", StringFromCharCode
-  ));
+// Set up the non-enumerable functions on the String prototype object.
+utils.InstallFunctions(GlobalString.prototype, DONT_ENUM, [
+  "valueOf", StringValueOf,
+  "toString", StringToString,
+  "charAt", StringCharAtJS,
+  "charCodeAt", StringCharCodeAtJS,
+  "codePointAt", StringCodePointAt,
+  "concat", StringConcat,
+  "endsWith", StringEndsWith,
+  "includes", StringIncludes,
+  "indexOf", StringIndexOfJS,
+  "lastIndexOf", StringLastIndexOfJS,
+  "localeCompare", StringLocaleCompareJS,
+  "match", StringMatchJS,
+  "normalize", StringNormalizeJS,
+  "repeat", StringRepeat,
+  "replace", StringReplace,
+  "search", StringSearch,
+  "slice", StringSlice,
+  "split", StringSplitJS,
+  "substring", StringSubstring,
+  "substr", StringSubstr,
+  "startsWith", StringStartsWith,
+  "toLowerCase", StringToLowerCaseJS,
+  "toLocaleLowerCase", StringToLocaleLowerCase,
+  "toUpperCase", StringToUpperCaseJS,
+  "toLocaleUpperCase", StringToLocaleUpperCase,
+  "trim", StringTrimJS,
+  "trimLeft", StringTrimLeft,
+  "trimRight", StringTrimRight,
 
-  // Set up the non-enumerable functions on the String prototype object.
-  InstallFunctions($String.prototype, DONT_ENUM, $Array(
-    "valueOf", StringValueOf,
-    "toString", StringToString,
-    "charAt", StringCharAt,
-    "charCodeAt", StringCharCodeAt,
-    "concat", StringConcat,
-    "indexOf", StringIndexOfJS,
-    "lastIndexOf", StringLastIndexOfJS,
-    "localeCompare", StringLocaleCompareJS,
-    "match", StringMatchJS,
-    "normalize", StringNormalizeJS,
-    "replace", StringReplace,
-    "search", StringSearch,
-    "slice", StringSlice,
-    "split", StringSplitJS,
-    "substring", StringSubstring,
-    "substr", StringSubstr,
-    "toLowerCase", StringToLowerCaseJS,
-    "toLocaleLowerCase", StringToLocaleLowerCase,
-    "toUpperCase", StringToUpperCaseJS,
-    "toLocaleUpperCase", StringToLocaleUpperCase,
-    "trim", StringTrimJS,
-    "trimLeft", StringTrimLeft,
-    "trimRight", StringTrimRight,
-    "link", StringLink,
-    "anchor", StringAnchor,
-    "fontcolor", StringFontcolor,
-    "fontsize", StringFontsize,
-    "big", StringBig,
-    "blink", StringBlink,
-    "bold", StringBold,
-    "fixed", StringFixed,
-    "italics", StringItalics,
-    "small", StringSmall,
-    "strike", StringStrike,
-    "sub", StringSub,
-    "sup", StringSup
-  ));
-}
+  "link", StringLink,
+  "anchor", StringAnchor,
+  "fontcolor", StringFontcolor,
+  "fontsize", StringFontsize,
+  "big", StringBig,
+  "blink", StringBlink,
+  "bold", StringBold,
+  "fixed", StringFixed,
+  "italics", StringItalics,
+  "small", StringSmall,
+  "strike", StringStrike,
+  "sub", StringSub,
+  "sup", StringSup
+]);
 
-SetUpString();
+// -------------------------------------------------------------------
+// Exports
+
+utils.Export(function(to) {
+  to.StringCharAt = StringCharAtJS;
+  to.StringIndexOf = StringIndexOfJS;
+  to.StringLastIndexOf = StringLastIndexOfJS;
+  to.StringMatch = StringMatchJS;
+  to.StringReplace = StringReplace;
+  to.StringSlice = StringSlice;
+  to.StringSplit = StringSplitJS;
+  to.StringSubstr = StringSubstr;
+  to.StringSubstring = StringSubstring;
+});
+
+})

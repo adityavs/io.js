@@ -1,8 +1,9 @@
 // Hello, and welcome to hacking node.js!
 //
-// This file is invoked by node::Load in src/node.cc, and responsible for
-// bootstrapping the node.js core. Special caution is given to the performance
-// of the startup process, so many dependencies are invoked lazily.
+// This file is invoked by node::LoadEnvironment in src/node.cc, and is
+// responsible for bootstrapping the node.js core. As special caution is given
+// to the performance of the startup process, many dependencies are invoked
+// lazily.
 
 'use strict';
 
@@ -10,7 +11,7 @@
   this.global = this;
 
   function startup() {
-    var EventEmitter = NativeModule.require('events').EventEmitter;
+    var EventEmitter = NativeModule.require('events');
 
     process.__proto__ = Object.create(EventEmitter.prototype, {
       constructor: {
@@ -20,6 +21,8 @@
     EventEmitter.call(process);
 
     process.EventEmitter = EventEmitter; // process.EventEmitter is deprecated
+
+    startup.setupProcessObject();
 
     // do this good and early, since it handles errors.
     startup.processFatal();
@@ -68,6 +71,9 @@
       var d = NativeModule.require('_debug_agent');
       d.start();
 
+    } else if (process.profProcess) {
+      NativeModule.require('internal/v8_prof_processor');
+
     } else {
       // There is user code to be run
 
@@ -92,6 +98,24 @@
         process.argv[1] = path.resolve(process.argv[1]);
 
         var Module = NativeModule.require('module');
+
+        // check if user passed `-c` or `--check` arguments to Node.
+        if (process._syntax_check_only != null) {
+          var vm = NativeModule.require('vm');
+          var fs = NativeModule.require('fs');
+          var internalModule = NativeModule.require('internal/module');
+          // read the source
+          var filename = Module._resolveFilename(process.argv[1]);
+          var source = fs.readFileSync(filename, 'utf-8');
+          // remove shebang and BOM
+          source = internalModule.stripBOM(source.replace(/^\#\!.*/, ''));
+          // wrap it
+          source = Module.wrap(source);
+          // compile the script, this will throw if it fails
+          new vm.Script(source, {filename: filename, displayErrors: true});
+          process.exit(0);
+        }
+
         startup.preloadModules();
         if (global.v8debug &&
             process.execArgv.some(function(arg) {
@@ -123,7 +147,7 @@
         // If -i or --interactive were passed, or stdin is a TTY.
         if (process._forceRepl || NativeModule.require('tty').isatty(0)) {
           // REPL
-          var cliRepl = Module.requireRepl();
+          var cliRepl = NativeModule.require('internal/repl');
           cliRepl.createInternalRepl(process.env, function(err, repl) {
             if (err) {
               throw err;
@@ -155,6 +179,15 @@
       }
     }
   }
+
+  startup.setupProcessObject = function() {
+    process._setupProcessObject(setPropByIndex);
+
+    function setPropByIndex() {
+      for (var i = 0; i < arguments.length; i++)
+        this.push(arguments[i]);
+    }
+  };
 
   startup.globalVariables = function() {
     global.process = process;
@@ -193,13 +226,6 @@
   };
 
   startup.processFatal = function() {
-    process._makeCallbackAbortOnUncaught = function() {
-      try {
-        return this[1].apply(this[0], arguments);
-      } catch (err) {
-        process._fatalException(err);
-      }
-    };
 
     process._fatalException = function(er) {
       var caught;
@@ -267,10 +293,6 @@
     // Used to run V8's micro task queue.
     var _runMicrotasks = {};
 
-    // This tickInfo thing is used so that the C++ code in src/node.cc
-    // can have easy accesss to our nextTick state, and avoid unnecessary
-    var tickInfo = {};
-
     // *Must* match Environment::TickInfo::Fields in src/env.h.
     var kIndex = 0;
     var kLength = 1;
@@ -280,7 +302,10 @@
     process._tickCallback = _tickCallback;
     process._tickDomainCallback = _tickDomainCallback;
 
-    process._setupNextTick(tickInfo, _tickCallback, _runMicrotasks);
+    // This tickInfo thing is used so that the C++ code in src/node.cc
+    // can have easy access to our nextTick state, and avoid unnecessary
+    // calls into JS land.
+    const tickInfo = process._setupNextTick(_tickCallback, _runMicrotasks);
 
     _runMicrotasks = _runMicrotasks.runMicrotasks;
 
@@ -334,20 +359,20 @@
           // callback invocation with small numbers of arguments to avoid the
           // performance hit associated with using `fn.apply()`
           if (args === undefined) {
-            doNTCallback0(callback);
+            nextTickCallbackWith0Args(callback);
           } else {
             switch (args.length) {
               case 1:
-                doNTCallback1(callback, args[0]);
+                nextTickCallbackWith1Arg(callback, args[0]);
                 break;
               case 2:
-                doNTCallback2(callback, args[0], args[1]);
+                nextTickCallbackWith2Args(callback, args[0], args[1]);
                 break;
               case 3:
-                doNTCallback3(callback, args[0], args[1], args[2]);
+                nextTickCallbackWith3Args(callback, args[0], args[1], args[2]);
                 break;
               default:
-                doNTCallbackMany(callback, args);
+                nextTickCallbackWithManyArgs(callback, args);
             }
           }
           if (1e4 < tickInfo[kIndex])
@@ -375,20 +400,20 @@
           // callback invocation with small numbers of arguments to avoid the
           // performance hit associated with using `fn.apply()`
           if (args === undefined) {
-            doNTCallback0(callback);
+            nextTickCallbackWith0Args(callback);
           } else {
             switch (args.length) {
               case 1:
-                doNTCallback1(callback, args[0]);
+                nextTickCallbackWith1Arg(callback, args[0]);
                 break;
               case 2:
-                doNTCallback2(callback, args[0], args[1]);
+                nextTickCallbackWith2Args(callback, args[0], args[1]);
                 break;
               case 3:
-                doNTCallback3(callback, args[0], args[1], args[2]);
+                nextTickCallbackWith3Args(callback, args[0], args[1], args[2]);
                 break;
               default:
-                doNTCallbackMany(callback, args);
+                nextTickCallbackWithManyArgs(callback, args);
             }
           }
           if (1e4 < tickInfo[kIndex])
@@ -402,7 +427,7 @@
       } while (tickInfo[kLength] !== 0);
     }
 
-    function doNTCallback0(callback) {
+    function nextTickCallbackWith0Args(callback) {
       var threw = true;
       try {
         callback();
@@ -413,7 +438,7 @@
       }
     }
 
-    function doNTCallback1(callback, arg1) {
+    function nextTickCallbackWith1Arg(callback, arg1) {
       var threw = true;
       try {
         callback(arg1);
@@ -424,7 +449,7 @@
       }
     }
 
-    function doNTCallback2(callback, arg1, arg2) {
+    function nextTickCallbackWith2Args(callback, arg1, arg2) {
       var threw = true;
       try {
         callback(arg1, arg2);
@@ -435,7 +460,7 @@
       }
     }
 
-    function doNTCallback3(callback, arg1, arg2, arg3) {
+    function nextTickCallbackWith3Args(callback, arg1, arg2, arg3) {
       var threw = true;
       try {
         callback(arg1, arg2, arg3);
@@ -446,7 +471,7 @@
       }
     }
 
-    function doNTCallbackMany(callback, args) {
+    function nextTickCallbackWithManyArgs(callback, args) {
       var threw = true;
       try {
         callback.apply(null, args);
@@ -464,6 +489,8 @@
     }
 
     function nextTick(callback) {
+      if (typeof callback !== 'function')
+        throw new TypeError('callback is not a function');
       // on the way out, don't bother. it won't get fired anyway.
       if (process._exiting)
         return;
@@ -562,7 +589,7 @@
              JSON.stringify(name) + ' });\n';
     // Defer evaluation for a tick.  This is a workaround for deferred
     // events not firing when evaluating scripts from the command line,
-    // see https://github.com/nodejs/io.js/issues/1600.
+    // see https://github.com/nodejs/node/issues/1600.
     process.nextTick(function() {
       var result = module._compile(script, name + '-wrapper');
       if (process._print_eval) console.log(result);
@@ -637,6 +664,11 @@
         er = er || new Error('process.stderr cannot be closed.');
         stderr.emit('error', er);
       };
+      if (stderr.isTTY) {
+        process.on('SIGWINCH', function() {
+          stderr._refreshSize();
+        });
+      }
       return stderr;
     });
 
@@ -699,7 +731,7 @@
       // not-reading state.
       if (stdin._handle && stdin._handle.readStop) {
         stdin._handle.reading = false;
-        stdin.push('');
+        stdin._readableState.reading = false;
         stdin._handle.readStop();
       }
 
@@ -708,7 +740,7 @@
       stdin.on('pause', function() {
         if (!stdin._handle)
           return;
-        stdin.push('');
+        stdin._readableState.reading = false;
         stdin._handle.reading = false;
         stdin._handle.readStop();
       });
@@ -798,8 +830,7 @@
     });
 
     process.on('removeListener', function(type, listener) {
-      if (signalWraps.hasOwnProperty(type) &&
-          NativeModule.require('events').listenerCount(this, type) === 0) {
+      if (signalWraps.hasOwnProperty(type) && this.listenerCount(type) === 0) {
         signalWraps[type].close();
         delete signalWraps[type];
       }
@@ -927,7 +958,7 @@
   };
 
   NativeModule.wrapper = [
-    '(function (exports, require, module, __filename, __dirname) { ',
+    '(function (exports, require, module, __filename, __dirname) {\n',
     '\n});'
   ];
 

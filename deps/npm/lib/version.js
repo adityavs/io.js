@@ -12,6 +12,7 @@ var npm = require('./npm.js')
 var git = require('./utils/git.js')
 var assert = require('assert')
 var lifecycle = require('./utils/lifecycle.js')
+var parseJSON = require('./utils/parse-json.js')
 
 version.usage = 'npm version [<newversion> | major | minor | patch | premajor | preminor | prepatch | prerelease]' +
                 '\n(run in package dir)\n' +
@@ -32,7 +33,7 @@ function version (args, silent, cb_) {
   fs.readFile(packagePath, function (er, data) {
     if (data) data = data.toString()
     try {
-      data = JSON.parse(data)
+      data = parseJSON(data)
     } catch (e) {
       er = e
       data = null
@@ -107,7 +108,7 @@ function updateShrinkwrap (newVersion, cb) {
 
     try {
       data = data.toString()
-      data = JSON.parse(data)
+      data = parseJSON(data)
     } catch (er) {
       log.error('version', 'Bad npm-shrinkwrap.json data')
       return cb(er)
@@ -141,7 +142,7 @@ function dump (data, cb) {
 
 function checkGit (localData, cb) {
   fs.stat(path.join(npm.localPrefix, '.git'), function (er, s) {
-    var doGit = !er && s.isDirectory() && npm.config.get('git-tag-version')
+    var doGit = !er && npm.config.get('git-tag-version')
     if (!doGit) {
       if (er) log.verbose('version', 'error checking for .git', er)
       log.verbose('version', 'not tagging in git')

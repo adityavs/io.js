@@ -5,7 +5,9 @@ PYTHON ?= python
 DESTDIR ?=
 SIGN ?=
 PREFIX ?= /usr/local
-STAGINGSERVER ?= iojs-www
+FLAKY_TESTS ?= run
+TEST_CI_ARGS ?=
+STAGINGSERVER ?= node-www
 
 OSTYPE := $(shell uname -s | tr '[A-Z]' '[a-z]')
 
@@ -13,9 +15,14 @@ OSTYPE := $(shell uname -s | tr '[A-Z]' '[a-z]')
 EXEEXT := $(shell $(PYTHON) -c \
 		"import sys; print('.exe' if sys.platform == 'win32' else '')")
 
-NODE ?= ./iojs$(EXEEXT)
-NODE_EXE = iojs$(EXEEXT)
-NODE_G_EXE = iojs_g$(EXEEXT)
+NODE ?= ./node$(EXEEXT)
+NODE_EXE = node$(EXEEXT)
+NODE_G_EXE = node_g$(EXEEXT)
+
+# Flags for packaging.
+BUILD_DOWNLOAD_FLAGS ?= --download=all
+BUILD_INTL_FLAGS ?= --with-intl=small-icu
+BUILD_RELEASE_FLAGS ?= $(BUILD_DOWNLOAD_FLAGS) $(BUILD_INTL_FLAGS)
 
 # Default to verbose builds.
 # To do quiet/pretty builds, run `make V=` to set V to an empty string,
@@ -60,12 +67,14 @@ uninstall:
 
 clean:
 	-rm -rf out/Makefile $(NODE_EXE) $(NODE_G_EXE) out/$(BUILDTYPE)/$(NODE_EXE)
-	@if [ -d out ]; then find out/ -name '*.o' -o -name '*.a' | xargs rm -rf; fi
+	@if [ -d out ]; then find out/ -name '*.o' -o -name '*.a' -o -name '*.d' | xargs rm -rf; fi
 	-rm -rf node_modules
+	@if [ -d deps/icu ]; then echo deleting deps/icu; rm -rf deps/icu; fi
+	-rm -f test.tap
 
 distclean:
 	-rm -rf out
-	-rm -f config.gypi icu_config.gypi
+	-rm -f config.gypi icu_config.gypi config_fips.gypi
 	-rm -f config.mk
 	-rm -rf $(NODE_EXE) $(NODE_G_EXE)
 	-rm -rf node_modules
@@ -94,19 +103,39 @@ test/gc/node_modules/weak/build/Release/weakref.node: $(NODE_EXE)
 		--directory="$(shell pwd)/test/gc/node_modules/weak" \
 		--nodedir="$(shell pwd)"
 
-build-addons: $(NODE_EXE)
-	rm -rf test/addons/doc-*/
+# Implicitly depends on $(NODE_EXE), see the build-addons rule for rationale.
+test/addons/.docbuildstamp: doc/api/addons.markdown
+	$(RM) -r test/addons/doc-*/
 	$(NODE) tools/doc/addon-verify.js
-	$(foreach dir, \
-			$(sort $(dir $(wildcard test/addons/*/*.gyp))), \
-			$(NODE) deps/npm/node_modules/node-gyp/bin/node-gyp rebuild \
-					--directory="$(shell pwd)/$(dir)" \
-					--nodedir="$(shell pwd)" && ) echo "build done"
+	touch $@
+
+ADDONS_BINDING_GYPS := \
+	$(filter-out test/addons/doc-*/binding.gyp, \
+		$(wildcard test/addons/*/binding.gyp))
+
+# Implicitly depends on $(NODE_EXE), see the build-addons rule for rationale.
+test/addons/.buildstamp: $(ADDONS_BINDING_GYPS) | test/addons/.docbuildstamp
+	# Cannot use $(wildcard test/addons/*/) here, it's evaluated before
+	# embedded addons have been generated from the documentation.
+	for dirname in test/addons/*/; do \
+		$(NODE) deps/npm/node_modules/node-gyp/bin/node-gyp rebuild \
+			--directory="$$PWD/$$dirname" \
+			--nodedir="$$PWD"; \
+	done
+	touch $@
+
+# .buildstamp and .docbuildstamp need $(NODE_EXE) but cannot depend on it
+# directly because it calls make recursively.  The parent make cannot know
+# if the subprocess touched anything so it pessimistically assumes that
+# .buildstamp and .docbuildstamp are out of date and need a rebuild.
+# Just goes to show that recursive make really is harmful...
+# TODO(bnoordhuis) Force rebuild after gyp or node-gyp update.
+build-addons: $(NODE_EXE) test/addons/.buildstamp
 
 test-gc: all test/gc/node_modules/weak/build/Release/weakref.node
 	$(PYTHON) tools/test.py --mode=release gc
 
-test-build: all build-addons
+test-build: | all build-addons
 
 test-all: test-build test/gc/node_modules/weak/build/Release/weakref.node
 	$(PYTHON) tools/test.py --mode=debug,release
@@ -114,8 +143,9 @@ test-all: test-build test/gc/node_modules/weak/build/Release/weakref.node
 test-all-valgrind: test-build
 	$(PYTHON) tools/test.py --mode=debug,release --valgrind
 
-test-ci:
-	$(PYTHON) tools/test.py -p tap --logfile test.tap --mode=release message parallel sequential
+test-ci: | build-addons
+	$(PYTHON) tools/test.py -p tap --logfile test.tap --mode=release --flaky-tests=$(FLAKY_TESTS) \
+		$(TEST_CI_ARGS) addons message parallel sequential
 
 test-release: test-build
 	$(PYTHON) tools/test.py --mode=release
@@ -139,7 +169,7 @@ test-debugger: all
 	$(PYTHON) tools/test.py debugger
 
 test-npm: $(NODE_EXE)
-	NODE_EXE=$(NODE_EXE) tools/test-npm.sh
+	NODE=$(NODE) tools/test-npm.sh
 
 test-npm-publish: $(NODE_EXE)
 	npm_package_config_publishtest=true $(NODE) deps/npm/test/run.js
@@ -156,7 +186,7 @@ test-timers-clean:
 
 apidoc_sources = $(wildcard doc/api/*.markdown)
 apidocs = $(addprefix out/,$(apidoc_sources:.markdown=.html)) \
-          $(addprefix out/,$(apidoc_sources:.markdown=.json))
+		$(addprefix out/,$(apidoc_sources:.markdown=.json))
 
 apidoc_dirs = out/doc out/doc/api/ out/doc/api/assets
 
@@ -242,7 +272,15 @@ else
 ifeq ($(DESTCPU),arm)
 ARCH=arm
 else
+ifeq ($(DESTCPU),ppc64)
+ARCH=ppc64
+else
+ifeq ($(DESTCPU),ppc)
+ARCH=ppc
+else
 ARCH=x86
+endif
+endif
 endif
 endif
 
@@ -254,7 +292,7 @@ ifeq ($(DESTCPU),ia32)
 override DESTCPU=x86
 endif
 
-TARNAME=iojs-$(FULLVERSION)
+TARNAME=node-$(FULLVERSION)
 TARBALL=$(TARNAME).tar
 BINARYNAME=$(TARNAME)-$(PLATFORM)-$(ARCH)
 BINARYTAR=$(BINARYNAME).tar
@@ -269,7 +307,7 @@ release-only:
 	@if [ "$(shell git status --porcelain | egrep -v '^\?\? ')" = "" ]; then \
 		exit 0 ; \
 	else \
-	  echo "" >&2 ; \
+		echo "" >&2 ; \
 		echo "The git repository is not clean." >&2 ; \
 		echo "Please commit changes before building release tarball." >&2 ; \
 		echo "" >&2 ; \
@@ -280,25 +318,29 @@ release-only:
 	@if [ "$(DISTTYPE)" != "release" -o "$(RELEASE)" = "1" ]; then \
 		exit 0; \
 	else \
-	  echo "" >&2 ; \
+		echo "" >&2 ; \
 		echo "#NODE_VERSION_IS_RELEASE is set to $(RELEASE)." >&2 ; \
-	  echo "Did you remember to update src/node_version.h?" >&2 ; \
-	  echo "" >&2 ; \
+		echo "Did you remember to update src/node_version.h?" >&2 ; \
+		echo "" >&2 ; \
 		exit 1 ; \
 	fi
 
 $(PKG): release-only
 	rm -rf $(PKGDIR)
 	rm -rf out/deps out/Release
-	$(PYTHON) ./configure --dest-cpu=x64 --tag=$(TAG)
+	$(PYTHON) ./configure \
+		--dest-cpu=x64 \
+		--tag=$(TAG) \
+		--release-urlbase=$(RELEASE_URLBASE) \
+		$(CONFIG_FLAGS) $(BUILD_RELEASE_FLAGS)
 	$(MAKE) install V=$(V) DESTDIR=$(PKGDIR)
 	SIGN="$(CODESIGN_CERT)" PKGDIR="$(PKGDIR)" bash tools/osx-codesign.sh
 	cat tools/osx-pkg.pmdoc/index.xml.tmpl \
-		| sed -E "s/\\{iojsversion\\}/$(FULLVERSION)/g" \
+		| sed -E "s/\\{nodeversion\\}/$(FULLVERSION)/g" \
 		| sed -E "s/\\{npmversion\\}/$(NPMVERSION)/g" \
 		> tools/osx-pkg.pmdoc/index.xml
 	$(PACKAGEMAKER) \
-		--id "org.iojs.pkg" \
+		--id "org.nodejs.pkg" \
 		--doc tools/osx-pkg.pmdoc \
 		--out $(PKG)
 	SIGN="$(PRODUCTSIGN_CERT)" PKG="$(PKG)" bash tools/osx-productsign.sh
@@ -306,14 +348,15 @@ $(PKG): release-only
 pkg: $(PKG)
 
 pkg-upload: pkg
-	ssh $(STAGINGSERVER) "mkdir -p staging/$(DISTTYPEDIR)/$(FULLVERSION)"
-	scp -p iojs-$(FULLVERSION).pkg $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION).pkg
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION).pkg.done"
+	ssh $(STAGINGSERVER) "mkdir -p nodejs/$(DISTTYPEDIR)/$(FULLVERSION)"
+	chmod 664 node-$(FULLVERSION).pkg
+	scp -p node-$(FULLVERSION).pkg $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION).pkg
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION).pkg.done"
 
 $(TARBALL): release-only $(NODE_EXE) doc
 	git checkout-index -a -f --prefix=$(TARNAME)/
 	mkdir -p $(TARNAME)/doc/api
-	cp doc/iojs.1 $(TARNAME)/doc/iojs.1
+	cp doc/node.1 $(TARNAME)/doc/node.1
 	cp -r out/doc/api/* $(TARNAME)/doc/api/
 	rm -rf $(TARNAME)/deps/v8/{test,samples,tools/profviz} # too big
 	rm -rf $(TARNAME)/doc/images # too big
@@ -332,21 +375,29 @@ endif
 tar: $(TARBALL)
 
 tar-upload: tar
-	ssh $(STAGINGSERVER) "mkdir -p staging/$(DISTTYPEDIR)/$(FULLVERSION)"
-	scp -p iojs-$(FULLVERSION).tar.gz $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION).tar.gz
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION).tar.gz.done"
+	ssh $(STAGINGSERVER) "mkdir -p nodejs/$(DISTTYPEDIR)/$(FULLVERSION)"
+	chmod 664 node-$(FULLVERSION).tar.gz
+	scp -p node-$(FULLVERSION).tar.gz $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION).tar.gz
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION).tar.gz.done"
 ifeq ($(XZ), 0)
-	scp -p iojs-$(FULLVERSION).tar.xz $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION).tar.xz
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION).tar.xz.done"
+	chmod 664 node-$(FULLVERSION).tar.xz
+	scp -p node-$(FULLVERSION).tar.xz $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION).tar.xz
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION).tar.xz.done"
 endif
 
 doc-upload: tar
-	ssh $(STAGINGSERVER) "mkdir -p staging/$(DISTTYPEDIR)/$(FULLVERSION)"
-	scp -r out/doc/ $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/doc.done"
+	ssh $(STAGINGSERVER) "mkdir -p nodejs/$(DISTTYPEDIR)/$(FULLVERSION)"
+	chmod -R ug=rw-x+X,o=r+X out/doc/
+	scp -pr out/doc/ $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/docs/
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/docs.done"
 
 $(TARBALL)-headers: config.gypi release-only
-	$(PYTHON) ./configure --prefix=/ --dest-cpu=$(DESTCPU) --tag=$(TAG) $(CONFIG_FLAGS)
+	$(PYTHON) ./configure \
+		--prefix=/ \
+		--dest-cpu=$(DESTCPU) \
+		--tag=$(TAG) \
+		--release-urlbase=$(RELEASE_URLBASE) \
+		$(CONFIG_FLAGS) $(BUILD_RELEASE_FLAGS)
 	HEADERS_ONLY=1 $(PYTHON) tools/install.py install '$(TARNAME)' '/'
 	find $(TARNAME)/ -type l | xargs rm # annoying on windows
 	tar -cf $(TARNAME)-headers.tar $(TARNAME)
@@ -360,18 +411,25 @@ endif
 tar-headers: $(TARBALL)-headers
 
 tar-headers-upload: tar-headers
-	ssh $(STAGINGSERVER) "mkdir -p staging/$(DISTTYPEDIR)/$(FULLVERSION)"
-	scp -p $(TARNAME)-headers.tar.gz $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.gz
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.gz.done"
+	ssh $(STAGINGSERVER) "mkdir -p nodejs/$(DISTTYPEDIR)/$(FULLVERSION)"
+	chmod 664 $(TARNAME)-headers.tar.gz
+	scp -p $(TARNAME)-headers.tar.gz $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.gz
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.gz.done"
 ifeq ($(XZ), 0)
-	scp -p $(TARNAME)-headers.tar.xz $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.xz
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.xz.done"
+	chmod 664 $(TARNAME)-headers.tar.xz
+	scp -p $(TARNAME)-headers.tar.xz $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.xz
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/$(TARNAME)-headers.tar.xz.done"
 endif
 
 $(BINARYTAR): release-only
 	rm -rf $(BINARYNAME)
 	rm -rf out/deps out/Release
-	$(PYTHON) ./configure --prefix=/ --dest-cpu=$(DESTCPU) --tag=$(TAG) $(CONFIG_FLAGS)
+	$(PYTHON) ./configure \
+		--prefix=/ \
+		--dest-cpu=$(DESTCPU) \
+		--tag=$(TAG) \
+		--release-urlbase=$(RELEASE_URLBASE) \
+		$(CONFIG_FLAGS) $(BUILD_RELEASE_FLAGS)
 	$(MAKE) install DESTDIR=$(BINARYNAME) V=$(V) PORTABLE=1
 	cp README.md $(BINARYNAME)
 	cp LICENSE $(BINARYNAME)
@@ -387,12 +445,14 @@ endif
 binary: $(BINARYTAR)
 
 binary-upload: binary
-	ssh $(STAGINGSERVER) "mkdir -p staging/$(DISTTYPEDIR)/$(FULLVERSION)"
-	scp -p iojs-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz.done"
+	ssh $(STAGINGSERVER) "mkdir -p nodejs/$(DISTTYPEDIR)/$(FULLVERSION)"
+	chmod 664 node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz
+	scp -p node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.gz.done"
 ifeq ($(XZ), 0)
-	scp -p iojs-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz $(STAGINGSERVER):staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz
-	ssh $(STAGINGSERVER) "touch staging/$(DISTTYPEDIR)/$(FULLVERSION)/iojs-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz.done"
+	chmod 664 node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz
+	scp -p node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz $(STAGINGSERVER):nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz
+	ssh $(STAGINGSERVER) "touch nodejs/$(DISTTYPEDIR)/$(FULLVERSION)/node-$(FULLVERSION)-$(OSTYPE)-$(ARCH).tar.xz.done"
 endif
 
 haswrk=$(shell which wrk > /dev/null 2>&1; echo $$?)
@@ -438,7 +498,7 @@ bench-all: bench bench-misc bench-array bench-buffer bench-url bench-events
 bench: bench-net bench-http bench-fs bench-tls
 
 bench-http-simple:
-	 benchmark/http_simple_bench.sh
+	benchmark/http_simple_bench.sh
 
 bench-idle:
 	$(NODE) benchmark/idle_server.js &
@@ -446,7 +506,8 @@ bench-idle:
 	$(NODE) benchmark/idle_clients.js &
 
 jslint:
-	$(NODE) tools/eslint/bin/eslint.js src lib test --rulesdir tools/eslint-rules --reset --quiet
+	$(NODE) tools/eslint/bin/eslint.js src lib test tools/eslint-rules \
+		--rulesdir tools/eslint-rules --reset --quiet
 
 CPPLINT_EXCLUDE ?=
 CPPLINT_EXCLUDE += src/node_lttng.cc
@@ -456,8 +517,19 @@ CPPLINT_EXCLUDE += src/node_win32_perfctr_provider.cc
 CPPLINT_EXCLUDE += src/queue.h
 CPPLINT_EXCLUDE += src/tree.h
 CPPLINT_EXCLUDE += src/v8abbr.h
+CPPLINT_EXCLUDE += $(wildcard test/addons/doc-*/*.cc test/addons/doc-*/*.h)
 
-CPPLINT_FILES = $(filter-out $(CPPLINT_EXCLUDE), $(wildcard src/*.cc src/*.h src/*.c tools/icu/*.h tools/icu/*.cc deps/debugger-agent/include/* deps/debugger-agent/src/*))
+CPPLINT_FILES = $(filter-out $(CPPLINT_EXCLUDE), $(wildcard \
+	deps/debugger-agent/include/* \
+	deps/debugger-agent/src/* \
+	src/*.c \
+	src/*.cc \
+	src/*.h \
+	test/addons/*/*.cc \
+	test/addons/*/*.h \
+	tools/icu/*.cc \
+	tools/icu/*.h \
+	))
 
 cpplint:
 	@$(PYTHON) tools/cpplint.py $(CPPLINT_FILES)

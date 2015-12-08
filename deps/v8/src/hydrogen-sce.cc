@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include "src/hydrogen-sce.h"
-#include "src/v8.h"
 
 namespace v8 {
 namespace internal {
@@ -36,4 +35,5 @@ void HStackCheckEliminationPhase::Run() {
   }
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

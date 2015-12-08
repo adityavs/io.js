@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/compiler/node-properties.h"
-
 #include "src/compiler/common-operator.h"
+#include "src/compiler/graph.h"
+#include "src/compiler/node-properties.h"
 #include "src/compiler/operator-properties.h"
+#include "src/compiler/verifier.h"
 
 namespace v8 {
 namespace internal {
@@ -58,9 +59,9 @@ Node* NodeProperties::GetContextInput(Node* node) {
 
 
 // static
-Node* NodeProperties::GetFrameStateInput(Node* node) {
-  DCHECK(OperatorProperties::HasFrameStateInput(node->op()));
-  return node->InputAt(FirstFrameStateIndex(node));
+Node* NodeProperties::GetFrameStateInput(Node* node, int index) {
+  DCHECK_LT(index, OperatorProperties::GetFrameStateInputCount(node->op()));
+  return node->InputAt(FirstFrameStateIndex(node) + index);
 }
 
 
@@ -119,6 +120,16 @@ bool NodeProperties::IsControlEdge(Edge edge) {
 
 
 // static
+bool NodeProperties::IsExceptionalCall(Node* node) {
+  for (Edge const edge : node->use_edges()) {
+    if (!NodeProperties::IsControlEdge(edge)) continue;
+    if (edge.from()->opcode() == IrOpcode::kIfException) return true;
+  }
+  return false;
+}
+
+
+// static
 void NodeProperties::ReplaceContextInput(Node* node, Node* context) {
   node->ReplaceInput(FirstContextIndex(node), context);
 }
@@ -138,9 +149,10 @@ void NodeProperties::ReplaceEffectInput(Node* node, Node* effect, int index) {
 
 
 // static
-void NodeProperties::ReplaceFrameStateInput(Node* node, Node* frame_state) {
-  DCHECK(OperatorProperties::HasFrameStateInput(node->op()));
-  node->ReplaceInput(FirstFrameStateIndex(node), frame_state);
+void NodeProperties::ReplaceFrameStateInput(Node* node, int index,
+                                            Node* frame_state) {
+  DCHECK_LT(index, OperatorProperties::GetFrameStateInputCount(node->op()));
+  node->ReplaceInput(FirstFrameStateIndex(node) + index, frame_state);
 }
 
 
@@ -150,22 +162,44 @@ void NodeProperties::RemoveNonValueInputs(Node* node) {
 }
 
 
-// static
-void NodeProperties::ReplaceWithValue(Node* node, Node* value, Node* effect) {
-  DCHECK(node->op()->ControlOutputCount() == 0);
-  if (!effect && node->op()->EffectInputCount() > 0) {
-    effect = NodeProperties::GetEffectInput(node);
-  }
+void NodeProperties::MergeControlToEnd(Graph* graph,
+                                       CommonOperatorBuilder* common,
+                                       Node* node) {
+  graph->end()->AppendInput(graph->zone(), node);
+  graph->end()->set_op(common->End(graph->end()->InputCount()));
+}
 
-  // Requires distinguishing between value and effect edges.
+
+// static
+void NodeProperties::ReplaceUses(Node* node, Node* value, Node* effect,
+                                 Node* success, Node* exception) {
+  // Requires distinguishing between value, effect and control edges.
   for (Edge edge : node->use_edges()) {
-    if (IsEffectEdge(edge)) {
+    if (IsControlEdge(edge)) {
+      if (edge.from()->opcode() == IrOpcode::kIfSuccess) {
+        DCHECK_NOT_NULL(success);
+        edge.UpdateTo(success);
+      } else if (edge.from()->opcode() == IrOpcode::kIfException) {
+        DCHECK_NOT_NULL(exception);
+        edge.UpdateTo(exception);
+      } else {
+        UNREACHABLE();
+      }
+    } else if (IsEffectEdge(edge)) {
       DCHECK_NOT_NULL(effect);
       edge.UpdateTo(effect);
     } else {
+      DCHECK_NOT_NULL(value);
       edge.UpdateTo(value);
     }
   }
+}
+
+
+// static
+void NodeProperties::ChangeOp(Node* node, const Operator* new_op) {
+  node->set_op(new_op);
+  Verifier::VerifyNode(node);
 }
 
 
@@ -185,22 +219,29 @@ Node* NodeProperties::FindProjection(Node* node, size_t projection_index) {
 void NodeProperties::CollectControlProjections(Node* node, Node** projections,
                                                size_t projection_count) {
 #ifdef DEBUG
-  DCHECK_EQ(static_cast<int>(projection_count), node->UseCount());
+  DCHECK_LE(static_cast<int>(projection_count), node->UseCount());
   std::memset(projections, 0, sizeof(*projections) * projection_count);
 #endif
   size_t if_value_index = 0;
-  for (Node* const use : node->uses()) {
+  for (Edge const edge : node->use_edges()) {
+    if (!IsControlEdge(edge)) continue;
+    Node* use = edge.from();
     size_t index;
     switch (use->opcode()) {
-      default:
-        UNREACHABLE();
-      // Fall through.
       case IrOpcode::kIfTrue:
         DCHECK_EQ(IrOpcode::kBranch, node->opcode());
         index = 0;
         break;
       case IrOpcode::kIfFalse:
         DCHECK_EQ(IrOpcode::kBranch, node->opcode());
+        index = 1;
+        break;
+      case IrOpcode::kIfSuccess:
+        DCHECK(!node->op()->HasProperty(Operator::kNoThrow));
+        index = 0;
+        break;
+      case IrOpcode::kIfException:
+        DCHECK(!node->op()->HasProperty(Operator::kNoThrow));
         index = 1;
         break;
       case IrOpcode::kIfValue:
@@ -211,6 +252,8 @@ void NodeProperties::CollectControlProjections(Node* node, Node** projections,
         DCHECK_EQ(IrOpcode::kSwitch, node->opcode());
         index = projection_count - 1;
         break;
+      default:
+        continue;
     }
     DCHECK_LT(if_value_index, projection_count);
     DCHECK_LT(index, projection_count);

@@ -17,12 +17,11 @@ const int kMaxKeyedPolymorphism = 4;
 class ICUtility : public AllStatic {
  public:
   // Clear the inline cache to initial state.
-  static void Clear(Isolate* isolate, Address address,
-                    ConstantPoolArray* constant_pool);
+  static void Clear(Isolate* isolate, Address address, Address constant_pool);
 };
 
 
-class CallICState FINAL BASE_EMBEDDED {
+class CallICState final BASE_EMBEDDED {
  public:
   explicit CallICState(ExtraICState extra_ic_state);
 
@@ -54,15 +53,16 @@ class CallICState FINAL BASE_EMBEDDED {
 std::ostream& operator<<(std::ostream& os, const CallICState& s);
 
 
-class BinaryOpICState FINAL BASE_EMBEDDED {
+class BinaryOpICState final BASE_EMBEDDED {
  public:
   BinaryOpICState(Isolate* isolate, ExtraICState extra_ic_state);
-
-  BinaryOpICState(Isolate* isolate, Token::Value op)
+  BinaryOpICState(Isolate* isolate, Token::Value op, Strength strength)
       : op_(op),
+        strong_(is_strong(strength)),
         left_kind_(NONE),
         right_kind_(NONE),
         result_kind_(NONE),
+        fixed_right_arg_(Nothing<int>()),
         isolate_(isolate) {
     DCHECK_LE(FIRST_TOKEN, op);
     DCHECK_LE(op, LAST_TOKEN);
@@ -105,6 +105,10 @@ class BinaryOpICState FINAL BASE_EMBEDDED {
     return Max(left_kind_, right_kind_) == GENERIC;
   }
 
+  Strength strength() const {
+    return strong_ ? Strength::STRONG : Strength::WEAK;
+  }
+
   // Returns true if the IC should enable the inline smi code (i.e. if either
   // parameter may be a smi).
   bool UseInlinedSmiCode() const {
@@ -143,13 +147,15 @@ class BinaryOpICState FINAL BASE_EMBEDDED {
   class OpField : public BitField<int, 0, 4> {};
   class ResultKindField : public BitField<Kind, 4, 3> {};
   class LeftKindField : public BitField<Kind, 7, 3> {};
+  class StrengthField : public BitField<bool, 10, 1> {};
   // When fixed right arg is set, we don't need to store the right kind.
   // Thus the two fields can overlap.
-  class HasFixedRightArgField : public BitField<bool, 10, 1> {};
-  class FixedRightArgValueField : public BitField<int, 11, 4> {};
-  class RightKindField : public BitField<Kind, 11, 3> {};
+  class HasFixedRightArgField : public BitField<bool, 11, 1> {};
+  class FixedRightArgValueField : public BitField<int, 12, 4> {};
+  class RightKindField : public BitField<Kind, 12, 3> {};
 
   Token::Value op_;
+  bool strong_;
   Kind left_kind_;
   Kind right_kind_;
   Kind result_kind_;
@@ -168,9 +174,11 @@ class CompareICState {
   //   ... < GENERIC
   //   SMI < NUMBER
   //   INTERNALIZED_STRING < STRING
+  //   INTERNALIZED_STRING < UNIQUE_NAME
   //   KNOWN_OBJECT < OBJECT
   enum State {
     UNINITIALIZED,
+    BOOLEAN,
     SMI,
     NUMBER,
     STRING,
@@ -194,27 +202,70 @@ class CompareICState {
 };
 
 
-class LoadICState FINAL BASE_EMBEDDED {
+class LoadICState final BASE_EMBEDDED {
+ private:
+  class TypeofModeBits : public BitField<TypeofMode, 0, 1> {};
+  class LanguageModeBits
+      : public BitField<LanguageMode, TypeofModeBits::kNext, 2> {};
+  STATIC_ASSERT(static_cast<int>(INSIDE_TYPEOF) == 0);
+  const ExtraICState state_;
+
  public:
+  static const uint32_t kNextBitFieldOffset = LanguageModeBits::kNext;
+
+  static const ExtraICState kStrongModeState = STRONG
+                                               << LanguageModeBits::kShift;
+
   explicit LoadICState(ExtraICState extra_ic_state) : state_(extra_ic_state) {}
 
-  explicit LoadICState(ContextualMode mode)
-      : state_(ContextualModeBits::encode(mode)) {}
+  explicit LoadICState(TypeofMode typeof_mode, LanguageMode language_mode)
+      : state_(TypeofModeBits::encode(typeof_mode) |
+               LanguageModeBits::encode(language_mode)) {}
 
   ExtraICState GetExtraICState() const { return state_; }
 
-  ContextualMode contextual_mode() const {
-    return ContextualModeBits::decode(state_);
+  TypeofMode typeof_mode() const { return TypeofModeBits::decode(state_); }
+
+  LanguageMode language_mode() const {
+    return LanguageModeBits::decode(state_);
   }
 
-  static ContextualMode GetContextualMode(ExtraICState state) {
-    return LoadICState(state).contextual_mode();
+  static TypeofMode GetTypeofMode(ExtraICState state) {
+    return LoadICState(state).typeof_mode();
   }
+
+  static LanguageMode GetLanguageMode(ExtraICState state) {
+    return LoadICState(state).language_mode();
+  }
+};
+
+
+class StoreICState final BASE_EMBEDDED {
+ public:
+  explicit StoreICState(ExtraICState extra_ic_state) : state_(extra_ic_state) {}
+
+  explicit StoreICState(LanguageMode mode)
+      : state_(LanguageModeState::encode(mode)) {}
+
+  ExtraICState GetExtraICState() const { return state_; }
+
+  LanguageMode language_mode() const {
+    return LanguageModeState::decode(state_);
+  }
+
+  static LanguageMode GetLanguageMode(ExtraICState state) {
+    return StoreICState(state).language_mode();
+  }
+
+  class LanguageModeState : public BitField<LanguageMode, 1, 2> {};
+  STATIC_ASSERT(i::LANGUAGE_END == 3);
+
+  // For convenience, a statically declared encoding of strict mode extra
+  // IC state.
+  static const ExtraICState kStrictModeState = STRICT
+                                               << LanguageModeState::kShift;
 
  private:
-  class ContextualModeBits : public BitField<ContextualMode, 0, 1> {};
-  STATIC_ASSERT(static_cast<int>(NOT_CONTEXTUAL) == 0);
-
   const ExtraICState state_;
 };
 }

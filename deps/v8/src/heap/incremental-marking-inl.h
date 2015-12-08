@@ -6,6 +6,7 @@
 #define V8_HEAP_INCREMENTAL_MARKING_INL_H_
 
 #include "src/heap/incremental-marking.h"
+#include "src/heap/mark-compact.h"
 
 namespace v8 {
 namespace internal {
@@ -85,7 +86,7 @@ void IncrementalMarking::BlackToGreyAndUnshift(HeapObject* obj,
   DCHECK(IsMarking());
   Marking::BlackToGrey(mark_bit);
   int obj_size = obj->Size();
-  MemoryChunk::IncrementLiveBytesFromGC(obj->address(), -obj_size);
+  MemoryChunk::IncrementLiveBytesFromGC(obj, -obj_size);
   bytes_scanned_ -= obj_size;
   int64_t old_bytes_rescanned = bytes_rescanned_;
   bytes_rescanned_ = old_bytes_rescanned + obj_size;
@@ -96,20 +97,22 @@ void IncrementalMarking::BlackToGreyAndUnshift(HeapObject* obj,
       // as the program mutates the heap faster than we can incrementally
       // trace it.  In this case we switch to non-incremental marking in
       // order to finish off this marking phase.
-      if (FLAG_trace_gc) {
-        PrintPID("Hurrying incremental marking because of lack of progress\n");
+      if (FLAG_trace_incremental_marking) {
+        PrintIsolate(
+            heap()->isolate(),
+            "Hurrying incremental marking because of lack of progress\n");
       }
       marking_speed_ = kMaxMarkingSpeed;
     }
   }
 
-  heap_->mark_compact_collector()->marking_deque()->UnshiftGrey(obj);
+  heap_->mark_compact_collector()->marking_deque()->Unshift(obj);
 }
 
 
 void IncrementalMarking::WhiteToGreyAndPush(HeapObject* obj, MarkBit mark_bit) {
   Marking::WhiteToGrey(mark_bit);
-  heap_->mark_compact_collector()->marking_deque()->PushGrey(obj);
+  heap_->mark_compact_collector()->marking_deque()->Push(obj);
 }
 }
 }  // namespace v8::internal

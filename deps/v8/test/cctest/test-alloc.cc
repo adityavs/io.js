@@ -30,19 +30,16 @@
 
 #include "src/accessors.h"
 #include "src/api.h"
+#include "test/cctest/heap-tester.h"
 
 
 using namespace v8::internal;
 
 
-static AllocationResult AllocateAfterFailures() {
-  static int attempts = 0;
-
-  if (++attempts < 3) return AllocationResult::Retry();
-  TestHeap* heap = CcTest::test_heap();
+AllocationResult v8::internal::HeapTester::AllocateAfterFailures() {
+  Heap* heap = CcTest::heap();
 
   // New space.
-  SimulateFullSpace(heap->new_space());
   heap->AllocateByteArray(100).ToObjectChecked();
   heap->AllocateFixedArray(100, NOT_TENURED).ToObjectChecked();
 
@@ -55,18 +52,18 @@ static AllocationResult AllocateAfterFailures() {
   heap->CopyJSObject(JSObject::cast(object)).ToObjectChecked();
 
   // Old data space.
-  SimulateFullSpace(heap->old_data_space());
+  SimulateFullSpace(heap->old_space());
   heap->AllocateByteArray(100, TENURED).ToObjectChecked();
 
   // Old pointer space.
-  SimulateFullSpace(heap->old_pointer_space());
+  SimulateFullSpace(heap->old_space());
   heap->AllocateFixedArray(10000, TENURED).ToObjectChecked();
 
   // Large object space.
-  static const int kLargeObjectSpaceFillerLength = 300000;
+  static const int kLargeObjectSpaceFillerLength = 3 * (Page::kPageSize / 10);
   static const int kLargeObjectSpaceFillerSize = FixedArray::SizeFor(
       kLargeObjectSpaceFillerLength);
-  DCHECK(kLargeObjectSpaceFillerSize > heap->old_pointer_space()->AreaSize());
+  DCHECK(kLargeObjectSpaceFillerSize > heap->old_space()->AreaSize());
   while (heap->OldGenerationSpaceAvailable() > kLargeObjectSpaceFillerSize) {
     heap->AllocateFixedArray(
         kLargeObjectSpaceFillerLength, TENURED).ToObjectChecked();
@@ -90,16 +87,21 @@ static AllocationResult AllocateAfterFailures() {
 }
 
 
-static Handle<Object> Test() {
-  CALL_HEAP_FUNCTION(CcTest::i_isolate(), AllocateAfterFailures(), Object);
+Handle<Object> v8::internal::HeapTester::TestAllocateAfterFailures() {
+  // Similar to what the CALL_AND_RETRY macro does in the last-resort case, we
+  // are wrapping the allocator function in an AlwaysAllocateScope.  Test that
+  // all allocations succeed immediately without any retry.
+  CcTest::heap()->CollectAllAvailableGarbage("panic");
+  AlwaysAllocateScope scope(CcTest::i_isolate());
+  return handle(AllocateAfterFailures().ToObjectChecked(), CcTest::i_isolate());
 }
 
 
-TEST(StressHandles) {
+HEAP_TEST(StressHandles) {
   v8::HandleScope scope(CcTest::isolate());
   v8::Handle<v8::Context> env = v8::Context::New(CcTest::isolate());
   env->Enter();
-  Handle<Object> o = Test();
+  Handle<Object> o = TestAllocateAfterFailures();
   CHECK(o->IsTrue());
   env->Exit();
 }
@@ -110,7 +112,8 @@ void TestGetter(
     const v8::PropertyCallbackInfo<v8::Value>& info) {
   i::Isolate* isolate = reinterpret_cast<i::Isolate*>(info.GetIsolate());
   HandleScope scope(isolate);
-  info.GetReturnValue().Set(v8::Utils::ToLocal(Test()));
+  info.GetReturnValue().Set(v8::Utils::ToLocal(
+      v8::internal::HeapTester::TestAllocateAfterFailures()));
 }
 
 
@@ -210,14 +213,17 @@ TEST(CodeRange) {
       // Geometrically distributed sizes, greater than
       // Page::kMaxRegularHeapObjectSize (which is greater than code page area).
       // TODO(gc): instead of using 3 use some contant based on code_range_size
-      // kMaxHeapObjectSize.
+      // kMaxRegularHeapObjectSize.
       size_t requested =
           (Page::kMaxRegularHeapObjectSize << (Pseudorandom() % 3)) +
           Pseudorandom() % 5000 + 1;
       size_t allocated = 0;
-      Address base = code_range.AllocateRawMemory(requested,
-                                                  requested,
-                                                  &allocated);
+
+      // The request size has to be at least 2 code guard pages larger than the
+      // actual commit size.
+      Address base = code_range.AllocateRawMemory(
+          requested, requested - (2 * MemoryAllocator::CodePageGuardSize()),
+          &allocated);
       CHECK(base != NULL);
       blocks.Add(::Block(base, static_cast<int>(allocated)));
       current_allocated += static_cast<int>(allocated);
@@ -234,6 +240,4 @@ TEST(CodeRange) {
       }
     }
   }
-
-  code_range.TearDown();
 }

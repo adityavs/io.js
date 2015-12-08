@@ -2,9 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
-
 #include "src/runtime/runtime.h"
+
+#include "src/contexts.h"
+#include "src/handles-inl.h"
+#include "src/heap/heap.h"
+#include "src/isolate.h"
 #include "src/runtime/runtime-utils.h"
 
 namespace v8 {
@@ -14,25 +17,13 @@ namespace internal {
 #define F(name, number_of_args, result_size)                    \
   Object* Runtime_##name(int args_length, Object** args_object, \
                          Isolate* isolate);
+FOR_EACH_INTRINSIC_RETURN_OBJECT(F)
+#undef F
 
 #define P(name, number_of_args, result_size)                       \
   ObjectPair Runtime_##name(int args_length, Object** args_object, \
                             Isolate* isolate);
-
-// Reference implementation for inlined runtime functions.  Only used when the
-// compiler does not support a certain intrinsic.  Don't optimize these, but
-// implement the intrinsic in the respective compiler instead.
-#define I(name, number_of_args, result_size)                             \
-  Object* RuntimeReference_##name(int args_length, Object** args_object, \
-                                  Isolate* isolate);
-
-RUNTIME_FUNCTION_LIST_RETURN_OBJECT(F)
-RUNTIME_FUNCTION_LIST_RETURN_PAIR(P)
-INLINE_OPTIMIZED_FUNCTION_LIST(F)
-INLINE_FUNCTION_LIST(I)
-
-#undef I
-#undef F
+FOR_EACH_INTRINSIC_RETURN_PAIR(P)
 #undef P
 
 
@@ -44,27 +35,18 @@ INLINE_FUNCTION_LIST(I)
   ,
 
 
-#define I(name, number_of_args, result_size)                                \
-  {                                                                         \
-    Runtime::kInline##name, Runtime::INLINE, "_" #name,                     \
-        FUNCTION_ADDR(RuntimeReference_##name), number_of_args, result_size \
-  }                                                                         \
+#define I(name, number_of_args, result_size)                       \
+  {                                                                \
+    Runtime::kInline##name, Runtime::INLINE, "_" #name,            \
+        FUNCTION_ADDR(Runtime_##name), number_of_args, result_size \
+  }                                                                \
   ,
-
-
-#define IO(name, number_of_args, result_size)                              \
-  {                                                                        \
-    Runtime::kInlineOptimized##name, Runtime::INLINE_OPTIMIZED, "_" #name, \
-        FUNCTION_ADDR(Runtime_##name), number_of_args, result_size         \
-  }                                                                        \
-  ,
-
 
 static const Runtime::Function kIntrinsicFunctions[] = {
-    RUNTIME_FUNCTION_LIST(F) INLINE_OPTIMIZED_FUNCTION_LIST(F)
-    INLINE_FUNCTION_LIST(I) INLINE_OPTIMIZED_FUNCTION_LIST(IO)};
+  FOR_EACH_INTRINSIC(F)
+  FOR_EACH_INTRINSIC(I)
+};
 
-#undef IO
 #undef I
 #undef F
 
@@ -78,7 +60,7 @@ void Runtime::InitializeIntrinsicFunctionNames(Isolate* isolate,
     if (name == NULL) continue;
     Handle<NameDictionary> new_dict = NameDictionary::Add(
         dict, isolate->factory()->InternalizeUtf8String(name),
-        Handle<Smi>(Smi::FromInt(i), isolate), PropertyDetails(NONE, DATA, 0));
+        Handle<Smi>(Smi::FromInt(i), isolate), PropertyDetails::Empty());
     // The dictionary does not need to grow.
     CHECK(new_dict.is_identical_to(dict));
   }

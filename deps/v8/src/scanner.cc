@@ -4,18 +4,17 @@
 
 // Features shared by parsing and pre-parsing scanners.
 
+#include "src/scanner.h"
+
 #include <stdint.h>
 
 #include <cmath>
-
-#include "src/v8.h"
 
 #include "src/ast-value-factory.h"
 #include "src/char-predicates-inl.h"
 #include "src/conversions-inl.h"
 #include "src/list-inl.h"
 #include "src/parser.h"
-#include "src/scanner.h"
 
 namespace v8 {
 namespace internal {
@@ -29,18 +28,23 @@ Handle<String> LiteralBuffer::Internalize(Isolate* isolate) const {
 }
 
 
+// Default implementation for streams that do not support bookmarks.
+bool Utf16CharacterStream::SetBookmark() { return false; }
+void Utf16CharacterStream::ResetToBookmark() { UNREACHABLE(); }
+
+
 // ----------------------------------------------------------------------------
 // Scanner
 
 Scanner::Scanner(UnicodeCache* unicode_cache)
     : unicode_cache_(unicode_cache),
-      octal_pos_(Location::invalid()),
-      harmony_scoping_(false),
-      harmony_modules_(false),
-      harmony_numeric_literals_(false),
-      harmony_classes_(false),
-      harmony_templates_(false),
-      harmony_unicode_(false) {}
+      bookmark_c0_(kNoBookmark),
+      octal_pos_(Location::invalid()) {
+  bookmark_current_.literal_chars = &bookmark_current_literal_;
+  bookmark_current_.raw_literal_chars = &bookmark_current_raw_literal_;
+  bookmark_next_.literal_chars = &bookmark_next_literal_;
+  bookmark_next_.raw_literal_chars = &bookmark_next_raw_literal_;
+}
 
 
 void Scanner::Initialize(Utf16CharacterStream* source) {
@@ -228,7 +232,16 @@ static const byte one_char_tokens[] = {
 
 
 Token::Value Scanner::Next() {
+  if (next_.token == Token::EOS) {
+    next_.location.beg_pos = current_.location.beg_pos;
+    next_.location.end_pos = current_.location.end_pos;
+  }
   current_ = next_;
+  if (V8_UNLIKELY(next_next_.token != Token::UNINITIALIZED)) {
+    next_ = next_next_;
+    next_next_.token = Token::UNINITIALIZED;
+    return current_.token;
+  }
   has_line_terminator_before_next_ = false;
   has_multiline_comment_before_next_ = false;
   if (static_cast<unsigned>(c0_) <= 0x7f) {
@@ -244,6 +257,20 @@ Token::Value Scanner::Next() {
   }
   Scan();
   return current_.token;
+}
+
+
+Token::Value Scanner::PeekAhead() {
+  if (next_next_.token != Token::UNINITIALIZED) {
+    return next_next_.token;
+  }
+  TokenDesc prev = current_;
+  Next();
+  Token::Value ret = next_.token;
+  next_next_ = next_;
+  next_ = current_;
+  current_ = prev;
+  return ret;
 }
 
 
@@ -656,10 +683,8 @@ void Scanner::Scan() {
         break;
 
       case '`':
-        if (HarmonyTemplates()) {
-          token = ScanTemplateStart();
-          break;
-        }
+        token = ScanTemplateStart();
+        break;
 
       default:
         if (c0_ < 0) {
@@ -788,11 +813,31 @@ uc32 Scanner::ScanOctalEscape(uc32 c, int length) {
 }
 
 
+const int kMaxAscii = 127;
+
+
 Token::Value Scanner::ScanString() {
   uc32 quote = c0_;
-  Advance();  // consume quote
+  Advance<false, false>();  // consume quote
 
   LiteralScope literal(this);
+  while (true) {
+    if (c0_ > kMaxAscii) {
+      HandleLeadSurrogate();
+      break;
+    }
+    if (c0_ < 0 || c0_ == '\n' || c0_ == '\r') return Token::ILLEGAL;
+    if (c0_ == quote) {
+      literal.Complete();
+      Advance<false, false>();
+      return Token::STRING;
+    }
+    uc32 c = c0_;
+    if (c == '\\') break;
+    Advance<false, false>();
+    AddLiteralChar(c);
+  }
+
   while (c0_ != quote && c0_ >= 0
          && !unicode_cache_->IsLineTerminator(c0_)) {
     uc32 c = c0_;
@@ -913,6 +958,7 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
   enum { DECIMAL, HEX, OCTAL, IMPLICIT_OCTAL, BINARY } kind = DECIMAL;
 
   LiteralScope literal(this);
+  bool at_start = !seen_period;
   if (seen_period) {
     // we have already seen a decimal point of the float
     AddLiteralChar('.');
@@ -937,7 +983,7 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
         while (IsHexDigit(c0_)) {
           AddLiteralCharAdvance();
         }
-      } else if (harmony_numeric_literals_ && (c0_ == 'o' || c0_ == 'O')) {
+      } else if (c0_ == 'o' || c0_ == 'O') {
         kind = OCTAL;
         AddLiteralCharAdvance();
         if (!IsOctalDigit(c0_)) {
@@ -947,7 +993,7 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
         while (IsOctalDigit(c0_)) {
           AddLiteralCharAdvance();
         }
-      } else if (harmony_numeric_literals_ && (c0_ == 'b' || c0_ == 'B')) {
+      } else if (c0_ == 'b' || c0_ == 'B') {
         kind = BINARY;
         AddLiteralCharAdvance();
         if (!IsBinaryDigit(c0_)) {
@@ -962,6 +1008,7 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
         kind = IMPLICIT_OCTAL;
         while (true) {
           if (c0_ == '8' || c0_ == '9') {
+            at_start = false;
             kind = DECIMAL;
             break;
           }
@@ -977,6 +1024,27 @@ Token::Value Scanner::ScanNumber(bool seen_period) {
 
     // Parse decimal digits and allow trailing fractional part.
     if (kind == DECIMAL) {
+      if (at_start) {
+        uint64_t value = 0;
+        while (IsDecimalDigit(c0_)) {
+          value = 10 * value + (c0_ - '0');
+
+          uc32 first_char = c0_;
+          Advance<false, false>();
+          AddLiteralChar(first_char);
+        }
+
+        if (next_.literal_chars->one_byte_literal().length() <= 10 &&
+            value <= Smi::kMaxValue && c0_ != '.' && c0_ != 'e' && c0_ != 'E') {
+          next_.smi_value_ = static_cast<int>(value);
+          literal.Complete();
+          HandleLeadSurrogate();
+
+          return Token::SMI;
+        }
+        HandleLeadSurrogate();
+      }
+
       ScanDecimalDigits();  // optional
       if (c0_ == '.') {
         AddLiteralCharAdvance();
@@ -1024,10 +1092,9 @@ uc32 Scanner::ScanIdentifierUnicodeEscape() {
 
 template <bool capture_raw>
 uc32 Scanner::ScanUnicodeEscape() {
-  // Accept both \uxxxx and \u{xxxxxx} (if harmony unicode escapes are
-  // allowed). In the latter case, the number of hex digits between { } is
-  // arbitrary. \ and u have already been read.
-  if (c0_ == '{' && HarmonyUnicode()) {
+  // Accept both \uxxxx and \u{xxxxxx}. In the latter case, the number of
+  // hex digits between { } is arbitrary. \ and u have already been read.
+  if (c0_ == '{') {
     Advance<capture_raw>();
     uc32 cp = ScanUnlimitedLengthHexNumber<capture_raw>(0x10ffff);
     if (cp < 0) {
@@ -1046,81 +1113,71 @@ uc32 Scanner::ScanUnicodeEscape() {
 // ----------------------------------------------------------------------------
 // Keyword Matcher
 
-#define KEYWORDS(KEYWORD_GROUP, KEYWORD)                                     \
-  KEYWORD_GROUP('b')                                                         \
-  KEYWORD("break", Token::BREAK)                                             \
-  KEYWORD_GROUP('c')                                                         \
-  KEYWORD("case", Token::CASE)                                               \
-  KEYWORD("catch", Token::CATCH)                                             \
-  KEYWORD("class",                                                           \
-          harmony_classes ? Token::CLASS : Token::FUTURE_RESERVED_WORD)      \
-  KEYWORD("const", Token::CONST)                                             \
-  KEYWORD("continue", Token::CONTINUE)                                       \
-  KEYWORD_GROUP('d')                                                         \
-  KEYWORD("debugger", Token::DEBUGGER)                                       \
-  KEYWORD("default", Token::DEFAULT)                                         \
-  KEYWORD("delete", Token::DELETE)                                           \
-  KEYWORD("do", Token::DO)                                                   \
-  KEYWORD_GROUP('e')                                                         \
-  KEYWORD("else", Token::ELSE)                                               \
-  KEYWORD("enum", Token::FUTURE_RESERVED_WORD)                               \
-  KEYWORD("export",                                                          \
-          harmony_modules ? Token::EXPORT : Token::FUTURE_RESERVED_WORD)     \
-  KEYWORD("extends",                                                         \
-          harmony_classes ? Token::EXTENDS : Token::FUTURE_RESERVED_WORD)    \
-  KEYWORD_GROUP('f')                                                         \
-  KEYWORD("false", Token::FALSE_LITERAL)                                     \
-  KEYWORD("finally", Token::FINALLY)                                         \
-  KEYWORD("for", Token::FOR)                                                 \
-  KEYWORD("function", Token::FUNCTION)                                       \
-  KEYWORD_GROUP('i')                                                         \
-  KEYWORD("if", Token::IF)                                                   \
-  KEYWORD("implements", Token::FUTURE_STRICT_RESERVED_WORD)                  \
-  KEYWORD("import",                                                          \
-          harmony_modules ? Token::IMPORT : Token::FUTURE_RESERVED_WORD)     \
-  KEYWORD("in", Token::IN)                                                   \
-  KEYWORD("instanceof", Token::INSTANCEOF)                                   \
-  KEYWORD("interface", Token::FUTURE_STRICT_RESERVED_WORD)                   \
-  KEYWORD_GROUP('l')                                                         \
-  KEYWORD("let",                                                             \
-          harmony_scoping ? Token::LET : Token::FUTURE_STRICT_RESERVED_WORD) \
-  KEYWORD_GROUP('n')                                                         \
-  KEYWORD("new", Token::NEW)                                                 \
-  KEYWORD("null", Token::NULL_LITERAL)                                       \
-  KEYWORD_GROUP('p')                                                         \
-  KEYWORD("package", Token::FUTURE_STRICT_RESERVED_WORD)                     \
-  KEYWORD("private", Token::FUTURE_STRICT_RESERVED_WORD)                     \
-  KEYWORD("protected", Token::FUTURE_STRICT_RESERVED_WORD)                   \
-  KEYWORD("public", Token::FUTURE_STRICT_RESERVED_WORD)                      \
-  KEYWORD_GROUP('r')                                                         \
-  KEYWORD("return", Token::RETURN)                                           \
-  KEYWORD_GROUP('s')                                                         \
-  KEYWORD("static", harmony_classes ? Token::STATIC                          \
-                                    : Token::FUTURE_STRICT_RESERVED_WORD)    \
-  KEYWORD("super",                                                           \
-          harmony_classes ? Token::SUPER : Token::FUTURE_RESERVED_WORD)      \
-  KEYWORD("switch", Token::SWITCH)                                           \
-  KEYWORD_GROUP('t')                                                         \
-  KEYWORD("this", Token::THIS)                                               \
-  KEYWORD("throw", Token::THROW)                                             \
-  KEYWORD("true", Token::TRUE_LITERAL)                                       \
-  KEYWORD("try", Token::TRY)                                                 \
-  KEYWORD("typeof", Token::TYPEOF)                                           \
-  KEYWORD_GROUP('v')                                                         \
-  KEYWORD("var", Token::VAR)                                                 \
-  KEYWORD("void", Token::VOID)                                               \
-  KEYWORD_GROUP('w')                                                         \
-  KEYWORD("while", Token::WHILE)                                             \
-  KEYWORD("with", Token::WITH)                                               \
-  KEYWORD_GROUP('y')                                                         \
+#define KEYWORDS(KEYWORD_GROUP, KEYWORD)                    \
+  KEYWORD_GROUP('b')                                        \
+  KEYWORD("break", Token::BREAK)                            \
+  KEYWORD_GROUP('c')                                        \
+  KEYWORD("case", Token::CASE)                              \
+  KEYWORD("catch", Token::CATCH)                            \
+  KEYWORD("class", Token::CLASS)                            \
+  KEYWORD("const", Token::CONST)                            \
+  KEYWORD("continue", Token::CONTINUE)                      \
+  KEYWORD_GROUP('d')                                        \
+  KEYWORD("debugger", Token::DEBUGGER)                      \
+  KEYWORD("default", Token::DEFAULT)                        \
+  KEYWORD("delete", Token::DELETE)                          \
+  KEYWORD("do", Token::DO)                                  \
+  KEYWORD_GROUP('e')                                        \
+  KEYWORD("else", Token::ELSE)                              \
+  KEYWORD("enum", Token::FUTURE_RESERVED_WORD)              \
+  KEYWORD("export", Token::EXPORT)                          \
+  KEYWORD("extends", Token::EXTENDS)                        \
+  KEYWORD_GROUP('f')                                        \
+  KEYWORD("false", Token::FALSE_LITERAL)                    \
+  KEYWORD("finally", Token::FINALLY)                        \
+  KEYWORD("for", Token::FOR)                                \
+  KEYWORD("function", Token::FUNCTION)                      \
+  KEYWORD_GROUP('i')                                        \
+  KEYWORD("if", Token::IF)                                  \
+  KEYWORD("implements", Token::FUTURE_STRICT_RESERVED_WORD) \
+  KEYWORD("import", Token::IMPORT)                          \
+  KEYWORD("in", Token::IN)                                  \
+  KEYWORD("instanceof", Token::INSTANCEOF)                  \
+  KEYWORD("interface", Token::FUTURE_STRICT_RESERVED_WORD)  \
+  KEYWORD_GROUP('l')                                        \
+  KEYWORD("let", Token::LET)                                \
+  KEYWORD_GROUP('n')                                        \
+  KEYWORD("new", Token::NEW)                                \
+  KEYWORD("null", Token::NULL_LITERAL)                      \
+  KEYWORD_GROUP('p')                                        \
+  KEYWORD("package", Token::FUTURE_STRICT_RESERVED_WORD)    \
+  KEYWORD("private", Token::FUTURE_STRICT_RESERVED_WORD)    \
+  KEYWORD("protected", Token::FUTURE_STRICT_RESERVED_WORD)  \
+  KEYWORD("public", Token::FUTURE_STRICT_RESERVED_WORD)     \
+  KEYWORD_GROUP('r')                                        \
+  KEYWORD("return", Token::RETURN)                          \
+  KEYWORD_GROUP('s')                                        \
+  KEYWORD("static", Token::STATIC)                          \
+  KEYWORD("super", Token::SUPER)                            \
+  KEYWORD("switch", Token::SWITCH)                          \
+  KEYWORD_GROUP('t')                                        \
+  KEYWORD("this", Token::THIS)                              \
+  KEYWORD("throw", Token::THROW)                            \
+  KEYWORD("true", Token::TRUE_LITERAL)                      \
+  KEYWORD("try", Token::TRY)                                \
+  KEYWORD("typeof", Token::TYPEOF)                          \
+  KEYWORD_GROUP('v')                                        \
+  KEYWORD("var", Token::VAR)                                \
+  KEYWORD("void", Token::VOID)                              \
+  KEYWORD_GROUP('w')                                        \
+  KEYWORD("while", Token::WHILE)                            \
+  KEYWORD("with", Token::WITH)                              \
+  KEYWORD_GROUP('y')                                        \
   KEYWORD("yield", Token::YIELD)
 
 
 static Token::Value KeywordOrIdentifierToken(const uint8_t* input,
-                                             int input_length,
-                                             bool harmony_scoping,
-                                             bool harmony_modules,
-                                             bool harmony_classes) {
+                                             int input_length) {
   DCHECK(input_length >= 1);
   const int kMinLength = 2;
   const int kMaxLength = 10;
@@ -1167,17 +1224,58 @@ bool Scanner::IdentifierIsFutureStrictReserved(
     return true;
   }
   return Token::FUTURE_STRICT_RESERVED_WORD ==
-         KeywordOrIdentifierToken(string->raw_data(), string->length(),
-                                  harmony_scoping_, harmony_modules_,
-                                  harmony_classes_);
+         KeywordOrIdentifierToken(string->raw_data(), string->length());
 }
 
 
 Token::Value Scanner::ScanIdentifierOrKeyword() {
   DCHECK(unicode_cache_->IsIdentifierStart(c0_));
   LiteralScope literal(this);
-  // Scan identifier start character.
-  if (c0_ == '\\') {
+  if (IsInRange(c0_, 'a', 'z')) {
+    do {
+      uc32 first_char = c0_;
+      Advance<false, false>();
+      AddLiteralChar(first_char);
+    } while (IsInRange(c0_, 'a', 'z'));
+
+    if (IsDecimalDigit(c0_) || IsInRange(c0_, 'A', 'Z') || c0_ == '_' ||
+        c0_ == '$') {
+      // Identifier starting with lowercase.
+      uc32 first_char = c0_;
+      Advance<false, false>();
+      AddLiteralChar(first_char);
+      while (IsAsciiIdentifier(c0_)) {
+        uc32 first_char = c0_;
+        Advance<false, false>();
+        AddLiteralChar(first_char);
+      }
+      if (c0_ <= kMaxAscii && c0_ != '\\') {
+        literal.Complete();
+        return Token::IDENTIFIER;
+      }
+    } else if (c0_ <= kMaxAscii && c0_ != '\\') {
+      // Only a-z+: could be a keyword or identifier.
+      literal.Complete();
+      Vector<const uint8_t> chars = next_.literal_chars->one_byte_literal();
+      return KeywordOrIdentifierToken(chars.start(), chars.length());
+    }
+
+    HandleLeadSurrogate();
+  } else if (IsInRange(c0_, 'A', 'Z') || c0_ == '_' || c0_ == '$') {
+    do {
+      uc32 first_char = c0_;
+      Advance<false, false>();
+      AddLiteralChar(first_char);
+    } while (IsAsciiIdentifier(c0_));
+
+    if (c0_ <= kMaxAscii && c0_ != '\\') {
+      literal.Complete();
+      return Token::IDENTIFIER;
+    }
+
+    HandleLeadSurrogate();
+  } else if (c0_ == '\\') {
+    // Scan identifier start character.
     uc32 c = ScanIdentifierUnicodeEscape();
     // Only allow legal identifier start characters.
     if (c < 0 ||
@@ -1187,11 +1285,11 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
     }
     AddLiteralChar(c);
     return ScanIdentifierSuffix(&literal);
+  } else {
+    uc32 first_char = c0_;
+    Advance();
+    AddLiteralChar(first_char);
   }
-
-  uc32 first_char = c0_;
-  Advance();
-  AddLiteralChar(first_char);
 
   // Scan the rest of the identifier characters.
   while (c0_ >= 0 && unicode_cache_->IsIdentifierPart(c0_)) {
@@ -1209,13 +1307,8 @@ Token::Value Scanner::ScanIdentifierOrKeyword() {
 
   if (next_.literal_chars->is_one_byte()) {
     Vector<const uint8_t> chars = next_.literal_chars->one_byte_literal();
-    return KeywordOrIdentifierToken(chars.start(),
-                                    chars.length(),
-                                    harmony_scoping_,
-                                    harmony_modules_,
-                                    harmony_classes_);
+    return KeywordOrIdentifierToken(chars.start(), chars.length());
   }
-
   return Token::IDENTIFIER;
 }
 
@@ -1341,8 +1434,10 @@ double Scanner::DoubleValue() {
 }
 
 
-int Scanner::FindNumber(DuplicateFinder* finder, int value) {
-  return finder->AddNumber(literal_one_byte_string(), value);
+bool Scanner::ContainsDot() {
+  DCHECK(is_literal_one_byte());
+  Vector<const uint8_t> str = literal_one_byte_string();
+  return std::find(str.begin(), str.end(), '.') != str.end();
 }
 
 
@@ -1351,6 +1446,56 @@ int Scanner::FindSymbol(DuplicateFinder* finder, int value) {
     return finder->AddOneByteSymbol(literal_one_byte_string(), value);
   }
   return finder->AddTwoByteSymbol(literal_two_byte_string(), value);
+}
+
+
+bool Scanner::SetBookmark() {
+  if (c0_ != kNoBookmark && bookmark_c0_ == kNoBookmark &&
+      next_next_.token == Token::UNINITIALIZED && source_->SetBookmark()) {
+    bookmark_c0_ = c0_;
+    CopyTokenDesc(&bookmark_current_, &current_);
+    CopyTokenDesc(&bookmark_next_, &next_);
+    return true;
+  }
+  return false;
+}
+
+
+void Scanner::ResetToBookmark() {
+  DCHECK(BookmarkHasBeenSet());  // Caller hasn't called SetBookmark.
+
+  source_->ResetToBookmark();
+  c0_ = bookmark_c0_;
+  StartLiteral();
+  StartRawLiteral();
+  CopyTokenDesc(&next_, &bookmark_current_);
+  current_ = next_;
+  StartLiteral();
+  StartRawLiteral();
+  CopyTokenDesc(&next_, &bookmark_next_);
+
+  bookmark_c0_ = kBookmarkWasApplied;
+}
+
+
+bool Scanner::BookmarkHasBeenSet() { return bookmark_c0_ >= 0; }
+
+
+bool Scanner::BookmarkHasBeenReset() {
+  return bookmark_c0_ == kBookmarkWasApplied;
+}
+
+
+void Scanner::DropBookmark() { bookmark_c0_ = kNoBookmark; }
+
+
+void Scanner::CopyTokenDesc(TokenDesc* to, TokenDesc* from) {
+  DCHECK_NOT_NULL(to);
+  DCHECK_NOT_NULL(from);
+  to->token = from->token;
+  to->location = from->location;
+  to->literal_chars->CopyFrom(from->literal_chars);
+  to->raw_literal_chars->CopyFrom(from->raw_literal_chars);
 }
 
 
@@ -1369,7 +1514,7 @@ int DuplicateFinder::AddSymbol(Vector<const uint8_t> key,
                                int value) {
   uint32_t hash = Hash(key, is_one_byte);
   byte* encoding = BackupKey(key, is_one_byte);
-  HashMap::Entry* entry = map_.Lookup(encoding, hash, true);
+  HashMap::Entry* entry = map_.LookupOrInsert(encoding, hash);
   int old_value = static_cast<int>(reinterpret_cast<intptr_t>(entry->value));
   entry->value =
     reinterpret_cast<void*>(static_cast<intptr_t>(value | old_value));
@@ -1434,7 +1579,7 @@ uint32_t DuplicateFinder::Hash(Vector<const uint8_t> key, bool is_one_byte) {
   // Primitive hash function, almost identical to the one used
   // for strings (except that it's seeded by the length and representation).
   int length = key.length();
-  uint32_t hash = (length << 1) | (is_one_byte ? 1 : 0) ;
+  uint32_t hash = (length << 1) | (is_one_byte ? 1 : 0);
   for (int i = 0; i < length; i++) {
     uint32_t c = key[i];
     hash = (hash + c) * 1025;
@@ -1493,4 +1638,5 @@ byte* DuplicateFinder::BackupKey(Vector<const uint8_t> bytes,
   return backing_store_.EndSequence().start();
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8

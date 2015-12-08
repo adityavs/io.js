@@ -18,6 +18,7 @@
 #include "src/compiler/register-allocator.h"
 #include "src/compiler/schedule.h"
 #include "src/compiler/scheduler.h"
+#include "src/interpreter/bytecodes.h"
 #include "src/ostreams.h"
 
 namespace v8 {
@@ -27,15 +28,12 @@ namespace compiler {
 
 FILE* OpenVisualizerLogFile(CompilationInfo* info, const char* phase,
                             const char* suffix, const char* mode) {
-  EmbeddedVector<char, 256> filename;
-  SmartArrayPointer<char> function_name;
-  if (!info->shared_info().is_null()) {
-    function_name = info->shared_info()->DebugName()->ToCString();
-    if (strlen(function_name.get()) > 0) {
-      SNPrintF(filename, "turbo-%s", function_name.get());
-    } else {
-      SNPrintF(filename, "turbo-%p", static_cast<void*>(info));
-    }
+  EmbeddedVector<char, 256> filename(0);
+  base::SmartArrayPointer<char> debug_name = info->GetDebugName();
+  if (strlen(debug_name.get()) > 0) {
+    SNPrintF(filename, "turbo-%s", debug_name.get());
+  } else if (info->has_shared_info()) {
+    SNPrintF(filename, "turbo-%p", static_cast<void*>(info));
   } else {
     SNPrintF(filename, "turbo-none-%s", phase);
   }
@@ -122,13 +120,18 @@ class JSONGraphNodeWriter {
       os_ << ",\"rankInputs\":[0]";
     }
     SourcePosition position = positions_->GetSourcePosition(node);
-    if (!position.IsUnknown()) {
-      DCHECK(!position.IsInvalid());
+    if (position.IsKnown()) {
       os_ << ",\"pos\":" << position.raw();
     }
     os_ << ",\"opcode\":\"" << IrOpcode::Mnemonic(node->opcode()) << "\"";
     os_ << ",\"control\":" << (NodeProperties::IsControl(node) ? "true"
                                                                : "false");
+    if (NodeProperties::IsTyped(node)) {
+      Type* type = NodeProperties::GetType(node);
+      std::ostringstream type_out;
+      type->PrintTo(type_out);
+      os_ << ",\"type\":\"" << Escaped(type_out, "\"") << "\"";
+    }
     os_ << "}";
   }
 
@@ -296,12 +299,10 @@ void GraphVisualizer::PrintNode(Node* node, bool gray) {
   os_ << "}";
 
   if (FLAG_trace_turbo_types && NodeProperties::IsTyped(node)) {
-    Bounds bounds = NodeProperties::GetBounds(node);
-    std::ostringstream upper;
-    bounds.upper->PrintTo(upper);
-    std::ostringstream lower;
-    bounds.lower->PrintTo(lower);
-    os_ << "|" << Escaped(upper) << "|" << Escaped(lower);
+    Type* type = NodeProperties::GetType(node);
+    std::ostringstream type_out;
+    type->PrintTo(type_out);
+    os_ << "|" << Escaped(type_out);
   }
   os_ << "}\"\n";
 
@@ -361,9 +362,17 @@ void GraphVisualizer::Print() {
       << "  concentrate=\"true\"\n"
       << "  \n";
 
+  // Find all nodes that are not reachable from end that use live nodes.
+  std::set<Node*> gray;
+  for (Node* const node : all_.live) {
+    for (Node* const use : node->uses()) {
+      if (!all_.IsLive(use)) gray.insert(use);
+    }
+  }
+
   // Make sure all nodes have been output before writing out the edges.
   for (Node* const node : all_.live) PrintNode(node, false);
-  for (Node* const node : all_.gray) PrintNode(node, true);
+  for (Node* const node : gray) PrintNode(node, true);
 
   // With all the nodes written, add the edges.
   for (Node* const node : all_.live) {
@@ -390,7 +399,7 @@ class GraphC1Visualizer {
   void PrintSchedule(const char* phase, const Schedule* schedule,
                      const SourcePositionTable* positions,
                      const InstructionSequence* instructions);
-  void PrintAllocator(const char* phase, const RegisterAllocator* allocator);
+  void PrintLiveRanges(const char* phase, const RegisterAllocationData* data);
   Zone* zone() const { return zone_; }
 
  private:
@@ -398,7 +407,7 @@ class GraphC1Visualizer {
   void PrintStringProperty(const char* name, const char* value);
   void PrintLongProperty(const char* name, int64_t value);
   void PrintIntProperty(const char* name, int value);
-  void PrintBlockProperty(const char* name, BasicBlock::Id block_id);
+  void PrintBlockProperty(const char* name, int rpo_number);
   void PrintNodeId(Node* n);
   void PrintNode(Node* n);
   void PrintInputs(Node* n);
@@ -406,8 +415,10 @@ class GraphC1Visualizer {
   void PrintInputs(InputIterator* i, int count, const char* prefix);
   void PrintType(Node* node);
 
-  void PrintLiveRange(LiveRange* range, const char* type);
-  class Tag FINAL BASE_EMBEDDED {
+  void PrintLiveRange(LiveRange* range, const char* type, int vreg);
+  void PrintLiveRangeChain(TopLevelLiveRange* range, const char* type);
+
+  class Tag final BASE_EMBEDDED {
    public:
     Tag(GraphC1Visualizer* visualizer, const char* name) {
       name_ = name;
@@ -461,10 +472,9 @@ void GraphC1Visualizer::PrintLongProperty(const char* name, int64_t value) {
 }
 
 
-void GraphC1Visualizer::PrintBlockProperty(const char* name,
-                                           BasicBlock::Id block_id) {
+void GraphC1Visualizer::PrintBlockProperty(const char* name, int rpo_number) {
   PrintIndent();
-  os_ << name << " \"B" << block_id << "\"\n";
+  os_ << name << " \"B" << rpo_number << "\"\n";
 }
 
 
@@ -476,15 +486,14 @@ void GraphC1Visualizer::PrintIntProperty(const char* name, int value) {
 
 void GraphC1Visualizer::PrintCompilation(const CompilationInfo* info) {
   Tag tag(this, "compilation");
+  base::SmartArrayPointer<char> name = info->GetDebugName();
   if (info->IsOptimizing()) {
-    Handle<String> name = info->function()->debug_name();
-    PrintStringProperty("name", name->ToCString().get());
+    PrintStringProperty("name", name.get());
     PrintIndent();
-    os_ << "method \"" << name->ToCString().get() << ":"
-        << info->optimization_id() << "\"\n";
+    os_ << "method \"" << name.get() << ":" << info->optimization_id()
+        << "\"\n";
   } else {
-    CodeStub::Major major_key = info->code_stub()->MajorKey();
-    PrintStringProperty("name", CodeStub::MajorName(major_key, false));
+    PrintStringProperty("name", name.get());
     PrintStringProperty("method", "stub");
   }
   PrintLongProperty("date",
@@ -531,11 +540,9 @@ void GraphC1Visualizer::PrintInputs(Node* node) {
 
 void GraphC1Visualizer::PrintType(Node* node) {
   if (NodeProperties::IsTyped(node)) {
-    Bounds bounds = NodeProperties::GetBounds(node);
+    Type* type = NodeProperties::GetType(node);
     os_ << " type:";
-    bounds.upper->PrintTo(os_);
-    os_ << "..";
-    bounds.lower->PrintTo(os_);
+    type->PrintTo(os_);
   }
 }
 
@@ -550,21 +557,21 @@ void GraphC1Visualizer::PrintSchedule(const char* phase,
   for (size_t i = 0; i < rpo->size(); i++) {
     BasicBlock* current = (*rpo)[i];
     Tag block_tag(this, "block");
-    PrintBlockProperty("name", current->id());
+    PrintBlockProperty("name", current->rpo_number());
     PrintIntProperty("from_bci", -1);
     PrintIntProperty("to_bci", -1);
 
     PrintIndent();
     os_ << "predecessors";
     for (BasicBlock* predecessor : current->predecessors()) {
-      os_ << " \"B" << predecessor->id() << "\"";
+      os_ << " \"B" << predecessor->rpo_number() << "\"";
     }
     os_ << "\n";
 
     PrintIndent();
     os_ << "successors";
     for (BasicBlock* successor : current->successors()) {
-      os_ << " \"B" << successor->id() << "\"";
+      os_ << " \"B" << successor->rpo_number() << "\"";
     }
     os_ << "\n";
 
@@ -575,20 +582,23 @@ void GraphC1Visualizer::PrintSchedule(const char* phase,
     os_ << "flags\n";
 
     if (current->dominator() != NULL) {
-      PrintBlockProperty("dominator", current->dominator()->id());
+      PrintBlockProperty("dominator", current->dominator()->rpo_number());
     }
 
     PrintIntProperty("loop_depth", current->loop_depth());
 
     const InstructionBlock* instruction_block =
-        instructions->InstructionBlockAt(current->GetRpoNumber());
+        instructions->InstructionBlockAt(
+            RpoNumber::FromInt(current->rpo_number()));
     if (instruction_block->code_start() >= 0) {
       int first_index = instruction_block->first_instruction_index();
       int last_index = instruction_block->last_instruction_index();
-      PrintIntProperty("first_lir_id", LifetimePosition::FromInstructionIndex(
-                                           first_index).Value());
-      PrintIntProperty("last_lir_id", LifetimePosition::FromInstructionIndex(
-                                          last_index).Value());
+      PrintIntProperty(
+          "first_lir_id",
+          LifetimePosition::GapFromInstructionIndex(first_index).value());
+      PrintIntProperty("last_lir_id",
+                       LifetimePosition::InstructionFromInstructionIndex(
+                           last_index).value());
     }
 
     {
@@ -631,8 +641,7 @@ void GraphC1Visualizer::PrintSchedule(const char* phase,
         }
         if (positions != NULL) {
           SourcePosition position = positions->GetSourcePosition(node);
-          if (!position.IsUnknown()) {
-            DCHECK(!position.IsInvalid());
+          if (position.IsKnown()) {
             os_ << " pos:" << position.raw();
           }
         }
@@ -646,11 +655,11 @@ void GraphC1Visualizer::PrintSchedule(const char* phase,
         if (current->control_input() != NULL) {
           PrintNode(current->control_input());
         } else {
-          os_ << -1 - current->id().ToInt() << " Goto";
+          os_ << -1 - current->rpo_number() << " Goto";
         }
         os_ << " ->";
         for (BasicBlock* successor : current->successors()) {
-          os_ << " B" << successor->id();
+          os_ << " B" << successor->rpo_number();
         }
         if (FLAG_trace_turbo_types && current->control_input() != NULL) {
           os_ << " ";
@@ -674,31 +683,42 @@ void GraphC1Visualizer::PrintSchedule(const char* phase,
 }
 
 
-void GraphC1Visualizer::PrintAllocator(const char* phase,
-                                       const RegisterAllocator* allocator) {
+void GraphC1Visualizer::PrintLiveRanges(const char* phase,
+                                        const RegisterAllocationData* data) {
   Tag tag(this, "intervals");
   PrintStringProperty("name", phase);
 
-  for (auto range : allocator->fixed_double_live_ranges()) {
-    PrintLiveRange(range, "fixed");
+  for (auto range : data->fixed_double_live_ranges()) {
+    PrintLiveRangeChain(range, "fixed");
   }
 
-  for (auto range : allocator->fixed_live_ranges()) {
-    PrintLiveRange(range, "fixed");
+  for (auto range : data->fixed_live_ranges()) {
+    PrintLiveRangeChain(range, "fixed");
   }
 
-  for (auto range : allocator->live_ranges()) {
-    PrintLiveRange(range, "object");
+  for (auto range : data->live_ranges()) {
+    PrintLiveRangeChain(range, "object");
   }
 }
 
 
-void GraphC1Visualizer::PrintLiveRange(LiveRange* range, const char* type) {
+void GraphC1Visualizer::PrintLiveRangeChain(TopLevelLiveRange* range,
+                                            const char* type) {
+  if (range == nullptr || range->IsEmpty()) return;
+  int vreg = range->vreg();
+  for (LiveRange* child = range; child != nullptr; child = child->next()) {
+    PrintLiveRange(child, type, vreg);
+  }
+}
+
+
+void GraphC1Visualizer::PrintLiveRange(LiveRange* range, const char* type,
+                                       int vreg) {
   if (range != NULL && !range->IsEmpty()) {
     PrintIndent();
-    os_ << range->id() << " " << type;
+    os_ << vreg << ":" << range->relative_id() << " " << type;
     if (range->HasRegisterAssigned()) {
-      InstructionOperand op = range->GetAssignedOperand();
+      AllocatedOperand op = AllocatedOperand::cast(range->GetAssignedOperand());
       int assigned_reg = op.index();
       if (op.IsDoubleRegister()) {
         os_ << " \"" << DoubleRegister::AllocationIndexToString(assigned_reg)
@@ -707,44 +727,36 @@ void GraphC1Visualizer::PrintLiveRange(LiveRange* range, const char* type) {
         DCHECK(op.IsRegister());
         os_ << " \"" << Register::AllocationIndexToString(assigned_reg) << "\"";
       }
-    } else if (range->IsSpilled()) {
+    } else if (range->spilled()) {
+      auto top = range->TopLevel();
       int index = -1;
-      if (range->TopLevel()->HasSpillRange()) {
+      if (top->HasSpillRange()) {
         index = kMaxInt;  // This hasn't been set yet.
+      } else if (top->GetSpillOperand()->IsConstant()) {
+        os_ << " \"const(nostack):"
+            << ConstantOperand::cast(top->GetSpillOperand())->virtual_register()
+            << "\"";
       } else {
-        index = range->TopLevel()->GetSpillOperand()->index();
-      }
-      if (range->TopLevel()->Kind() == DOUBLE_REGISTERS) {
-        os_ << " \"double_stack:" << index << "\"";
-      } else if (range->TopLevel()->Kind() == GENERAL_REGISTERS) {
-        os_ << " \"stack:" << index << "\"";
-      } else {
-        os_ << " \"const(nostack):" << index << "\"";
+        index = AllocatedOperand::cast(top->GetSpillOperand())->index();
+        if (top->kind() == DOUBLE_REGISTERS) {
+          os_ << " \"double_stack:" << index << "\"";
+        } else if (top->kind() == GENERAL_REGISTERS) {
+          os_ << " \"stack:" << index << "\"";
+        }
       }
     }
-    int parent_index = -1;
-    if (range->IsChild()) {
-      parent_index = range->parent()->id();
-    } else {
-      parent_index = range->id();
-    }
-    InstructionOperand* op = range->FirstHint();
-    int hint_index = -1;
-    if (op != NULL && op->IsUnallocated()) {
-      hint_index = UnallocatedOperand::cast(op)->virtual_register();
-    }
-    os_ << " " << parent_index << " " << hint_index;
-    UseInterval* cur_interval = range->first_interval();
-    while (cur_interval != NULL && range->Covers(cur_interval->start())) {
-      os_ << " [" << cur_interval->start().Value() << ", "
-          << cur_interval->end().Value() << "[";
-      cur_interval = cur_interval->next();
+
+    os_ << " " << vreg;
+    for (auto interval = range->first_interval(); interval != nullptr;
+         interval = interval->next()) {
+      os_ << " [" << interval->start().value() << ", "
+          << interval->end().value() << "[";
     }
 
     UsePosition* current_pos = range->first_pos();
     while (current_pos != NULL) {
       if (current_pos->RegisterIsBeneficial() || FLAG_trace_all_uses) {
-        os_ << " " << current_pos->pos().Value() << " M";
+        os_ << " " << current_pos->pos().value() << " M";
       }
       current_pos = current_pos->next();
     }
@@ -769,9 +781,10 @@ std::ostream& operator<<(std::ostream& os, const AsC1V& ac) {
 }
 
 
-std::ostream& operator<<(std::ostream& os, const AsC1VAllocator& ac) {
+std::ostream& operator<<(std::ostream& os,
+                         const AsC1VRegisterAllocationData& ac) {
   Zone tmp_zone;
-  GraphC1Visualizer(os, &tmp_zone).PrintAllocator(ac.phase_, ac.allocator_);
+  GraphC1Visualizer(os, &tmp_zone).PrintLiveRanges(ac.phase_, ac.data_);
   return os;
 }
 
@@ -811,6 +824,6 @@ std::ostream& operator<<(std::ostream& os, const AsRPO& ar) {
   }
   return os;
 }
-}
-}
-}  // namespace v8::internal::compiler
+}  // namespace compiler
+}  // namespace internal
+}  // namespace v8

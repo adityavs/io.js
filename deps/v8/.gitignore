@@ -24,6 +24,7 @@
 .cproject
 .d8_history
 .gclient_entries
+.landmines
 .project
 .pydevproject
 .settings
@@ -59,6 +60,9 @@ shell_g
 /test/promises-aplus/promises-tests
 /test/promises-aplus/promises-tests.tar.gz
 /test/promises-aplus/sinon
+/test/simdjs/CHECKED_OUT_*
+/test/simdjs/ecmascript_simd*
+/test/simdjs/data*
 /test/test262/data
 /test/test262/data.old
 /test/test262/tc39-test262-*
@@ -76,6 +80,7 @@ shell_g
 /tools/jsfunfuzz.zip
 /tools/oom_dump/oom_dump
 /tools/oom_dump/oom_dump.o
+/tools/swarming_client
 /tools/visual_studio/Debug
 /tools/visual_studio/Release
 /v8.log.ll
