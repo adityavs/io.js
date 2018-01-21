@@ -13,6 +13,7 @@ using testing::StrictMock;
 
 namespace v8 {
 namespace platform {
+namespace task_queue_unittest {
 
 namespace {
 
@@ -26,7 +27,7 @@ class TaskQueueThread final : public base::Thread {
   explicit TaskQueueThread(TaskQueue* queue)
       : Thread(Options("libplatform TaskQueueThread")), queue_(queue) {}
 
-  virtual void Run() override { EXPECT_THAT(queue_->GetNext(), IsNull()); }
+  void Run() override { EXPECT_THAT(queue_->GetNext(), IsNull()); }
 
  private:
   TaskQueue* queue_;
@@ -56,5 +57,6 @@ TEST(TaskQueueTest, TerminateMultipleReaders) {
   thread2.Join();
 }
 
+}  // namespace task_queue_unittest
 }  // namespace platform
 }  // namespace v8

@@ -5,28 +5,12 @@
 #ifndef V8_MIPS_CODE_STUBS_MIPS_H_
 #define V8_MIPS_CODE_STUBS_MIPS_H_
 
-#include "src/mips/frames-mips.h"
-
 namespace v8 {
 namespace internal {
 
 
-void ArrayNativeCode(MacroAssembler* masm, Label* call_generic_code);
-
-
 class StringHelper : public AllStatic {
  public:
-  // Generate code for copying a large number of characters. This function
-  // is allowed to spend extra time setting up conditions to make copying
-  // faster. Copying of overlapping regions is not supported.
-  // Dest register ends at the position after the last character written.
-  static void GenerateCopyCharacters(MacroAssembler* masm,
-                                     Register dest,
-                                     Register src,
-                                     Register count,
-                                     Register scratch,
-                                     String::Encoding encoding);
-
   // Compares two flat one-byte strings and returns result in v0.
   static void GenerateCompareFlatOneByteStrings(
       MacroAssembler* masm, Register left, Register right, Register scratch1,
@@ -119,50 +103,9 @@ class RecordWriteStub: public PlatformCodeStub {
     DCHECK(Assembler::IsBeq(masm->instr_at(pos)));
   }
 
-  static Mode GetMode(Code* stub) {
-    Instr first_instruction = Assembler::instr_at(stub->instruction_start());
-    Instr second_instruction = Assembler::instr_at(stub->instruction_start() +
-                                                   2 * Assembler::kInstrSize);
+  static Mode GetMode(Code* stub);
 
-    if (Assembler::IsBeq(first_instruction)) {
-      return INCREMENTAL;
-    }
-
-    DCHECK(Assembler::IsBne(first_instruction));
-
-    if (Assembler::IsBeq(second_instruction)) {
-      return INCREMENTAL_COMPACTION;
-    }
-
-    DCHECK(Assembler::IsBne(second_instruction));
-
-    return STORE_BUFFER_ONLY;
-  }
-
-  static void Patch(Code* stub, Mode mode) {
-    MacroAssembler masm(NULL,
-                        stub->instruction_start(),
-                        stub->instruction_size());
-    switch (mode) {
-      case STORE_BUFFER_ONLY:
-        DCHECK(GetMode(stub) == INCREMENTAL ||
-               GetMode(stub) == INCREMENTAL_COMPACTION);
-        PatchBranchIntoNop(&masm, 0);
-        PatchBranchIntoNop(&masm, 2 * Assembler::kInstrSize);
-        break;
-      case INCREMENTAL:
-        DCHECK(GetMode(stub) == STORE_BUFFER_ONLY);
-        PatchNopIntoBranch(&masm, 0);
-        break;
-      case INCREMENTAL_COMPACTION:
-        DCHECK(GetMode(stub) == STORE_BUFFER_ONLY);
-        PatchNopIntoBranch(&masm, 2 * Assembler::kInstrSize);
-        break;
-    }
-    DCHECK(GetMode(stub) == mode);
-    CpuFeatures::FlushICache(stub->instruction_start(),
-                             4 * Assembler::kInstrSize);
-  }
+  static void Patch(Code* stub, Mode mode);
 
   DEFINE_NULL_CALL_INTERFACE_DESCRIPTOR();
 
@@ -172,12 +115,11 @@ class RecordWriteStub: public PlatformCodeStub {
   // the caller.
   class RegisterAllocation {
    public:
-    RegisterAllocation(Register object,
-                       Register address,
-                       Register scratch0)
+    RegisterAllocation(Register object, Register address, Register scratch0)
         : object_(object),
           address_(address),
-          scratch0_(scratch0) {
+          scratch0_(scratch0),
+          scratch1_(no_reg) {
       DCHECK(!AreAliased(scratch0, object, address, no_reg));
       scratch1_ = GetRegisterThatIsNotOneOf(object_, address_, scratch0_);
     }
@@ -240,9 +182,7 @@ class RecordWriteStub: public PlatformCodeStub {
       Mode mode);
   void InformIncrementalMarker(MacroAssembler* masm);
 
-  void Activate(Code* code) override {
-    code->GetHeap()->incremental_marking()->ActivateGeneratedStub(code);
-  }
+  void Activate(Code* code) override;
 
   Register object() const {
     return Register::from_code(ObjectBits::decode(minor_key_));
@@ -312,14 +252,6 @@ class NameDictionaryLookupStub: public PlatformCodeStub {
                                      Handle<Name> name,
                                      Register scratch0);
 
-  static void GeneratePositiveLookup(MacroAssembler* masm,
-                                     Label* miss,
-                                     Label* done,
-                                     Register elements,
-                                     Register name,
-                                     Register r0,
-                                     Register r1);
-
   bool SometimesSetsUpAFrame() override { return false; }
 
  private:
@@ -343,6 +275,7 @@ class NameDictionaryLookupStub: public PlatformCodeStub {
 };
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_MIPS_CODE_STUBS_MIPS_H_

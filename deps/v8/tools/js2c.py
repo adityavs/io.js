@@ -145,24 +145,15 @@ class TextMacro:
     self.args = args
     self.body = body
   def expand(self, mapping):
-    result = self.body
-    for key, value in mapping.items():
-        result = result.replace(key, value)
-    return result
-
-class PythonMacro:
-  def __init__(self, args, fun):
-    self.args = args
-    self.fun = fun
-  def expand(self, mapping):
-    args = []
-    for arg in self.args:
-      args.append(mapping[arg])
-    return str(self.fun(*args))
+    # Keys could be substrings of earlier values. To avoid unintended
+    # clobbering, apply all replacements simultaneously.
+    any_key_pattern = "|".join(re.escape(k) for k in mapping.iterkeys())
+    def replace(match):
+      return mapping[match.group(0)]
+    return re.sub(any_key_pattern, replace, self.body)
 
 CONST_PATTERN = re.compile(r'^define\s+([a-zA-Z0-9_]+)\s*=\s*([^;]*);$')
 MACRO_PATTERN = re.compile(r'^macro\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*=\s*([^;]*);$')
-PYTHON_MACRO_PATTERN = re.compile(r'^python\s+macro\s+([a-zA-Z0-9_]+)\s*\(([^)]*)\)\s*=\s*([^;]*);$')
 
 
 def ReadMacros(lines):
@@ -186,15 +177,7 @@ def ReadMacros(lines):
         body = macro_match.group(3).strip()
         macros.append((re.compile("\\b%s\\(" % name), TextMacro(args, body)))
       else:
-        python_match = PYTHON_MACRO_PATTERN.match(line)
-        if python_match:
-          name = python_match.group(1)
-          args = [match.strip() for match in python_match.group(2).split(',')]
-          body = python_match.group(3).strip()
-          fun = eval("lambda " + ",".join(args) + ': ' + body)
-          macros.append((re.compile("\\b%s\\(" % name), PythonMacro(args, fun)))
-        else:
-          raise Error("Illegal line: " + line)
+        raise Error("Illegal line: " + line)
   return (constants, macros)
 
 
@@ -234,7 +217,7 @@ def ExpandInlineMacros(lines):
     name_pattern = re.compile("\\b%s\\(" % name)
     macro = TextMacro(args, body)
 
-    # advance position to where the macro defintion was
+    # advance position to where the macro definition was
     pos = macro_match.start()
 
     def non_expander(s):
@@ -242,7 +225,7 @@ def ExpandInlineMacros(lines):
     lines = ExpandMacroDefinition(lines, pos, name_pattern, macro, non_expander)
 
 
-INLINE_CONSTANT_PATTERN = re.compile(r'define\s+([a-zA-Z0-9_]+)\s*=\s*([^;\n]+)[;\n]')
+INLINE_CONSTANT_PATTERN = re.compile(r'define\s+([a-zA-Z0-9_]+)\s*=\s*([^;\n]+);\n')
 
 def ExpandInlineConstants(lines):
   pos = 0
@@ -259,7 +242,7 @@ def ExpandInlineConstants(lines):
     lines = (lines[:const_match.start()] +
              re.sub(name_pattern, replacement, lines[const_match.end():]))
 
-    # advance position to where the constant defintion was
+    # advance position to where the constant definition was
     pos = const_match.start()
 
 
@@ -348,8 +331,8 @@ def BuildFilterChain(macro_filename, message_template_file):
 
   if macro_filename:
     (consts, macros) = ReadMacros(ReadFile(macro_filename))
-    filter_chain.append(lambda l: ExpandConstants(l, consts))
     filter_chain.append(lambda l: ExpandMacros(l, macros))
+    filter_chain.append(lambda l: ExpandConstants(l, consts))
 
   if message_template_file:
     message_templates = ReadMessageTemplates(ReadFile(message_template_file))
@@ -417,7 +400,7 @@ def PrepareSources(source_files, native_type, emit_js):
     message_template_file = message_template_files[0]
 
   filters = None
-  if native_type == "EXTRAS":
+  if native_type in ("EXTRAS", "EXPERIMENTAL_EXTRAS"):
     filters = BuildExtraFilterChain()
   else:
     filters = BuildFilterChain(macro_file, message_template_file)

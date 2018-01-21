@@ -76,6 +76,10 @@ char* SimpleStringBuilder::Finalize() {
   return buffer_.start();
 }
 
+std::ostream& operator<<(std::ostream& os, FeedbackSlot slot) {
+  return os << "#" << slot.id_;
+}
+
 
 size_t hash_value(BailoutId id) {
   base::hash<int> h;
@@ -352,8 +356,7 @@ void StringBuilder::AddFormattedList(const char* format, va_list list) {
   }
 }
 
-
-#if V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_X87
+#if V8_TARGET_ARCH_IA32
 static void MemMoveWrapper(void* dest, const void* src, size_t size) {
   memmove(dest, src, size);
 }
@@ -363,7 +366,7 @@ static void MemMoveWrapper(void* dest, const void* src, size_t size) {
 static MemMoveFunction memmove_function = &MemMoveWrapper;
 
 // Defined in codegen-ia32.cc.
-MemMoveFunction CreateMemMoveFunction();
+MemMoveFunction CreateMemMoveFunction(Isolate* isolate);
 
 // Copy memory area to disjoint memory area.
 void MemMove(void* dest, const void* src, size_t size) {
@@ -382,45 +385,52 @@ void MemCopyUint16Uint8Wrapper(uint16_t* dest, const uint8_t* src,
   }
 }
 
-
-MemCopyUint8Function memcopy_uint8_function = &MemCopyUint8Wrapper;
+V8_EXPORT_PRIVATE MemCopyUint8Function memcopy_uint8_function =
+    &MemCopyUint8Wrapper;
 MemCopyUint16Uint8Function memcopy_uint16_uint8_function =
     &MemCopyUint16Uint8Wrapper;
 // Defined in codegen-arm.cc.
-MemCopyUint8Function CreateMemCopyUint8Function(MemCopyUint8Function stub);
+MemCopyUint8Function CreateMemCopyUint8Function(Isolate* isolate,
+                                                MemCopyUint8Function stub);
 MemCopyUint16Uint8Function CreateMemCopyUint16Uint8Function(
-    MemCopyUint16Uint8Function stub);
+    Isolate* isolate, MemCopyUint16Uint8Function stub);
 
 #elif V8_OS_POSIX && V8_HOST_ARCH_MIPS
-MemCopyUint8Function memcopy_uint8_function = &MemCopyUint8Wrapper;
+V8_EXPORT_PRIVATE MemCopyUint8Function memcopy_uint8_function =
+    &MemCopyUint8Wrapper;
 // Defined in codegen-mips.cc.
-MemCopyUint8Function CreateMemCopyUint8Function(MemCopyUint8Function stub);
+MemCopyUint8Function CreateMemCopyUint8Function(Isolate* isolate,
+                                                MemCopyUint8Function stub);
 #endif
 
 
-void init_memcopy_functions() {
-#if V8_TARGET_ARCH_IA32 || V8_TARGET_ARCH_X87
-  MemMoveFunction generated_memmove = CreateMemMoveFunction();
+static bool g_memcopy_functions_initialized = false;
+
+
+void init_memcopy_functions(Isolate* isolate) {
+  if (g_memcopy_functions_initialized) return;
+  g_memcopy_functions_initialized = true;
+#if V8_TARGET_ARCH_IA32
+  MemMoveFunction generated_memmove = CreateMemMoveFunction(isolate);
   if (generated_memmove != NULL) {
     memmove_function = generated_memmove;
   }
 #elif V8_OS_POSIX && V8_HOST_ARCH_ARM
-  memcopy_uint8_function = CreateMemCopyUint8Function(&MemCopyUint8Wrapper);
+  memcopy_uint8_function =
+      CreateMemCopyUint8Function(isolate, &MemCopyUint8Wrapper);
   memcopy_uint16_uint8_function =
-      CreateMemCopyUint16Uint8Function(&MemCopyUint16Uint8Wrapper);
+      CreateMemCopyUint16Uint8Function(isolate, &MemCopyUint16Uint8Wrapper);
 #elif V8_OS_POSIX && V8_HOST_ARCH_MIPS
-  memcopy_uint8_function = CreateMemCopyUint8Function(&MemCopyUint8Wrapper);
+  memcopy_uint8_function =
+      CreateMemCopyUint8Function(isolate, &MemCopyUint8Wrapper);
 #endif
 }
 
 
 bool DoubleToBoolean(double d) {
   // NaN, +0, and -0 should return the false object
-#if V8_TARGET_LITTLE_ENDIAN
-  union IeeeDoubleLittleEndianArchType u;
-#else
-  union IeeeDoubleBigEndianArchType u;
-#endif
+  IeeeDoubleArchType u;
+
   u.d = d;
   if (u.bits.exp == 2047) {
     // Detect NaN for IEEE double precision floating point.

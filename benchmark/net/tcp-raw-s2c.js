@@ -1,22 +1,23 @@
 // In this benchmark, we connect a client to the server, and write
 // as many bytes as we can in the specified time (default = 10s)
+'use strict';
 
-var common = require('../common.js');
-var util = require('util');
+const common = require('../common.js');
+const util = require('util');
 
 // if there are dur=N and len=N args, then
 // run the function with those settings.
 // if not, then queue up a bunch of child processes.
-var bench = common.createBenchmark(main, {
+const bench = common.createBenchmark(main, {
   len: [102400, 1024 * 1024 * 16],
   type: ['utf', 'asc', 'buf'],
   dur: [5]
 });
 
-var TCP = process.binding('tcp_wrap').TCP;
-var TCPConnectWrap = process.binding('tcp_wrap').TCPConnectWrap;
-var WriteWrap = process.binding('stream_wrap').WriteWrap;
-var PORT = common.PORT;
+const { TCP, constants: TCPConstants } = process.binding('tcp_wrap');
+const TCPConnectWrap = process.binding('tcp_wrap').TCPConnectWrap;
+const WriteWrap = process.binding('stream_wrap').WriteWrap;
+const PORT = common.PORT;
 
 var dur;
 var len;
@@ -34,7 +35,7 @@ function fail(err, syscall) {
 }
 
 function server() {
-  var serverHandle = new TCP();
+  const serverHandle = new TCP(TCPConstants.SERVER);
   var err = serverHandle.bind('127.0.0.1', PORT);
   if (err)
     fail(err, 'bind');
@@ -50,18 +51,16 @@ function server() {
     var chunk;
     switch (type) {
       case 'buf':
-        chunk = new Buffer(len);
-        chunk.fill('x');
+        chunk = Buffer.alloc(len, 'x');
         break;
       case 'utf':
-        chunk = new Array(len / 2 + 1).join('ü');
+        chunk = 'ü'.repeat(len / 2);
         break;
       case 'asc':
-        chunk = new Array(len + 1).join('x');
+        chunk = 'x'.repeat(len);
         break;
       default:
-        throw new Error('invalid type: ' + type);
-        break;
+        throw new Error(`invalid type: ${type}`);
     }
 
     clientHandle.readStart();
@@ -70,7 +69,7 @@ function server() {
       write();
 
     function write() {
-      var writeReq = new WriteWrap();
+      const writeReq = new WriteWrap();
       writeReq.async = false;
       writeReq.oncomplete = afterWrite;
       var err;
@@ -108,9 +107,9 @@ function server() {
 }
 
 function client() {
-  var clientHandle = new TCP();
-  var connectReq = new TCPConnectWrap();
-  var err = clientHandle.connect(connectReq, '127.0.0.1', PORT);
+  const clientHandle = new TCP(TCPConstants.SOCKET);
+  const connectReq = new TCPConnectWrap();
+  const err = clientHandle.connect(connectReq, '127.0.0.1', PORT);
 
   if (err)
     fail(err, 'connect');
@@ -136,6 +135,7 @@ function client() {
     setTimeout(function() {
       // report in Gb/sec
       bench.end((bytes * 8) / (1024 * 1024 * 1024));
+      process.exit(0);
     }, dur * 1000);
   };
 }

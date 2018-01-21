@@ -35,7 +35,7 @@ static inline void StringBuilderConcatHelper(String* special, sinkchar* sink,
     Object* element = fixed_array->get(i);
     if (element->IsSmi()) {
       // Smi encoding of position and length.
-      int encoded_slice = Smi::cast(element)->value();
+      int encoded_slice = Smi::ToInt(element);
       int pos;
       int len;
       if (encoded_slice > 0) {
@@ -46,7 +46,7 @@ static inline void StringBuilderConcatHelper(String* special, sinkchar* sink,
         // Position and length encoded in two smis.
         Object* obj = fixed_array->get(++i);
         DCHECK(obj->IsSmi());
-        pos = Smi::cast(obj)->value();
+        pos = Smi::ToInt(obj);
         len = -encoded_slice;
       }
       String::WriteToFlat(special, sink + position, pos, pos + len);
@@ -73,7 +73,7 @@ static inline int StringBuilderConcatLength(int special_length,
     Object* elt = fixed_array->get(i);
     if (elt->IsSmi()) {
       // Smi encoding of position and length.
-      int smi_value = Smi::cast(elt)->value();
+      int smi_value = Smi::ToInt(elt);
       int pos;
       int len;
       if (smi_value > 0) {
@@ -88,7 +88,7 @@ static inline int StringBuilderConcatLength(int special_length,
         if (i >= array_length) return -1;
         Object* next_smi = fixed_array->get(i);
         if (!next_smi->IsSmi()) return -1;
-        pos = Smi::cast(next_smi)->value();
+        pos = Smi::ToInt(next_smi);
         if (pos < 0) return -1;
       }
       DCHECK(pos >= 0);
@@ -179,7 +179,6 @@ class FixedArrayBuilder {
     target_array->set_length(Smi::FromInt(length_));
     return target_array;
   }
-
 
  private:
   Handle<FixedArray> array_;
@@ -293,13 +292,38 @@ class IncrementalStringBuilder {
     }
   }
 
+  INLINE(void AppendCString(const uc16* s)) {
+    if (encoding_ == String::ONE_BYTE_ENCODING) {
+      while (*s != '\0') Append<uc16, uint8_t>(*(s++));
+    } else {
+      while (*s != '\0') Append<uc16, uc16>(*(s++));
+    }
+  }
+
   INLINE(bool CurrentPartCanFit(int length)) {
     return part_length_ - current_index_ > length;
+  }
+
+  // We make a rough estimate to find out if the current string can be
+  // serialized without allocating a new string part. The worst case length of
+  // an escaped character is 6. Shifting the remaining string length right by 3
+  // is a more pessimistic estimate, but faster to calculate.
+  INLINE(int EscapedLengthIfCurrentPartFits(int length)) {
+    if (length > kMaxPartLength) return 0;
+    STATIC_ASSERT((kMaxPartLength << 3) <= String::kMaxLength);
+    // This shift will not overflow because length is already less than the
+    // maximum part length.
+    int worst_case_length = length << 3;
+    return CurrentPartCanFit(worst_case_length) ? worst_case_length : 0;
   }
 
   void AppendString(Handle<String> string);
 
   MaybeHandle<String> Finish();
+
+  INLINE(bool HasOverflowed()) const { return overflowed_; }
+
+  INLINE(int Length()) const { return accumulator_->length() + current_index_; }
 
   // Change encoding to two-byte.
   void ChangeEncoding() {
@@ -346,10 +370,12 @@ class IncrementalStringBuilder {
       DCHECK(string->length() >= required_length);
     }
 
-    ~NoExtendString() {
+    Handle<String> Finalize() {
       Handle<SeqString> string = Handle<SeqString>::cast(string_);
       int length = NoExtend<DestChar>::written();
-      *string_.location() = *SeqString::Truncate(string, length);
+      Handle<String> result = SeqString::Truncate(string, length);
+      string_ = Handle<String>();
+      return result;
     }
 
    private:
@@ -429,7 +455,7 @@ void IncrementalStringBuilder::Append(SrcChar c) {
   }
   if (current_index_ == part_length_) Extend();
 }
-}
-}  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_STRING_BUILDER_H_

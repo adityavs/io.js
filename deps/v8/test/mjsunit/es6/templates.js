@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+// Flags: --no-harmony-template-escapes
+
 var num = 5;
 var str = "str";
 function fn() { return "result"; }
@@ -476,7 +478,7 @@ var obj = {
 (function testLegacyOctal() {
   assertEquals('\u0000', `\0`);
   assertEquals('\u0000a', `\0a`);
-  for (var i = 0; i < 8; i++) {
+  for (var i = 0; i < 10; i++) {
     var code = "`\\0" + i + "`";
     assertThrows(code, SyntaxError);
     code = "(function(){})" + code;
@@ -502,8 +504,6 @@ var obj = {
 (function testValidNumericEscapes() {
   assertEquals("8", `\8`);
   assertEquals("9", `\9`);
-  assertEquals("\u00008", `\08`);
-  assertEquals("\u00009", `\09`);
 })();
 
 
@@ -696,4 +696,23 @@ var global = this;
   assertEquals("-1-", tag`-${subs[0]}-`);
   assertArrayEquals(["get0"], log);
   assertArrayEquals([1], tagged);
+})();
+
+
+// Since the first argument to the tag function is always an array,
+// eval calls will always just return that array.
+(function testEvalTagStrict() {
+  "use strict";
+  var f = (x) => eval`a${x}b`;
+  var result = f();
+  assertEquals(["a", "b"], result);
+  assertSame(result, f());
+})();
+
+
+(function testEvalTagSloppy() {
+  var f = (x) => eval`a${x}b`;
+  var result = f();
+  assertEquals(["a", "b"], result);
+  assertSame(result, f());
 })();

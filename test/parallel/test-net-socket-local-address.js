@@ -1,46 +1,41 @@
 'use strict';
 const common = require('../common');
+// skip test in FreeBSD jails
+if (common.inFreeBSDJail)
+  common.skip('In a FreeBSD jail');
+
 const assert = require('assert');
 const net = require('net');
 
-// skip test in FreeBSD jails
-if (common.inFreeBSDJail) {
-  console.log('1..0 # Skipped: In a FreeBSD jail');
-  return;
-}
-
-var conns = 0;
-var clientLocalPorts = [];
-var serverRemotePorts = [];
-
-const server = net.createServer(function(socket) {
+let conns = 0;
+const clientLocalPorts = [];
+const serverRemotePorts = [];
+const client = new net.Socket();
+const server = net.createServer((socket) => {
   serverRemotePorts.push(socket.remotePort);
-  testConnect();
+  socket.end();
 });
 
-const client = new net.Socket();
-
-server.on('close', common.mustCall(function() {
-  assert.deepEqual(clientLocalPorts, serverRemotePorts,
-                   'client and server should agree on the ports used');
-  assert.equal(2, conns);
+server.on('close', common.mustCall(() => {
+  assert.deepStrictEqual(clientLocalPorts, serverRemotePorts,
+                         'client and server should agree on the ports used');
+  assert.strictEqual(2, conns);
 }));
 
-server.listen(common.PORT, common.localhostIPv4, testConnect);
+server.listen(0, common.localhostIPv4, connect);
 
-function testConnect() {
-  if (conns > serverRemotePorts.length || conns > clientLocalPorts.length) {
-    // We're waiting for a callback to fire.
+function connect() {
+  if (conns === 2) {
+    server.close();
     return;
   }
 
-  if (conns === 2) {
-    return server.close();
-  }
-  client.connect(common.PORT, common.localhostIPv4, function() {
-    clientLocalPorts.push(this.localPort);
-    this.once('close', testConnect);
-    this.destroy();
-  });
   conns++;
+  client.once('close', connect);
+  assert.strictEqual(
+    client,
+    client.connect(server.address().port, common.localhostIPv4, () => {
+      clientLocalPorts.push(client.localPort);
+    })
+  );
 }

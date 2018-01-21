@@ -1,11 +1,13 @@
 #ifndef SRC_STREAM_BASE_H_
 #define SRC_STREAM_BASE_H_
 
+#if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
+
 #include "env.h"
-#include "async-wrap.h"
-#include "req-wrap.h"
-#include "req-wrap-inl.h"
+#include "async_wrap.h"
+#include "req_wrap-inl.h"
 #include "node.h"
+#include "util.h"
 
 #include "v8.h"
 
@@ -14,20 +16,27 @@ namespace node {
 // Forward declarations
 class StreamBase;
 
-template <class Req>
+template<typename Base>
 class StreamReq {
  public:
-  typedef void (*DoneCb)(Req* req, int status);
-
-  explicit StreamReq(DoneCb cb) : cb_(cb) {
+  explicit StreamReq(StreamBase* stream) : stream_(stream) {
   }
 
-  inline void Done(int status) {
-    cb_(static_cast<Req*>(this), status);
+  inline void Done(int status, const char* error_str = nullptr) {
+    Base* req = static_cast<Base*>(this);
+    Environment* env = req->env();
+    if (error_str != nullptr) {
+      req->object()->Set(env->error_string(),
+                         OneByteString(env->isolate(), error_str));
+    }
+
+    req->OnDone(status);
   }
+
+  inline StreamBase* stream() const { return stream_; }
 
  private:
-  DoneCb cb_;
+  StreamBase* const stream_;
 };
 
 class ShutdownWrap : public ReqWrap<uv_shutdown_t>,
@@ -35,57 +44,68 @@ class ShutdownWrap : public ReqWrap<uv_shutdown_t>,
  public:
   ShutdownWrap(Environment* env,
                v8::Local<v8::Object> req_wrap_obj,
-               StreamBase* wrap,
-               DoneCb cb)
+               StreamBase* stream)
       : ReqWrap(env, req_wrap_obj, AsyncWrap::PROVIDER_SHUTDOWNWRAP),
-        StreamReq<ShutdownWrap>(cb),
-        wrap_(wrap) {
+        StreamReq<ShutdownWrap>(stream) {
     Wrap(req_wrap_obj, this);
   }
 
-  static void NewShutdownWrap(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    CHECK(args.IsConstructCall());
+  ~ShutdownWrap() {
+    ClearWrap(object());
   }
 
-  inline StreamBase* wrap() const { return wrap_; }
+  static ShutdownWrap* from_req(uv_shutdown_t* req) {
+    return ContainerOf(&ShutdownWrap::req_, req);
+  }
+
   size_t self_size() const override { return sizeof(*this); }
 
- private:
-  StreamBase* const wrap_;
+  inline void OnDone(int status);  // Just calls stream()->AfterShutdown()
 };
 
-class WriteWrap: public ReqWrap<uv_write_t>,
-                 public StreamReq<WriteWrap> {
+class WriteWrap : public ReqWrap<uv_write_t>,
+                  public StreamReq<WriteWrap> {
  public:
   static inline WriteWrap* New(Environment* env,
                                v8::Local<v8::Object> obj,
-                               StreamBase* wrap,
-                               DoneCb cb,
+                               StreamBase* stream,
                                size_t extra = 0);
   inline void Dispose();
   inline char* Extra(size_t offset = 0);
-
-  inline StreamBase* wrap() const { return wrap_; }
+  inline size_t ExtraSize() const;
 
   size_t self_size() const override { return storage_size_; }
 
-  static void NewWriteWrap(const v8::FunctionCallbackInfo<v8::Value>& args) {
-    CHECK(args.IsConstructCall());
+  static WriteWrap* from_req(uv_write_t* req) {
+    return ContainerOf(&WriteWrap::req_, req);
   }
 
   static const size_t kAlignSize = 16;
 
+  WriteWrap(Environment* env,
+            v8::Local<v8::Object> obj,
+            StreamBase* stream)
+      : ReqWrap(env, obj, AsyncWrap::PROVIDER_WRITEWRAP),
+        StreamReq<WriteWrap>(stream),
+        storage_size_(0) {
+    Wrap(obj, this);
+  }
+
+  inline void OnDone(int status);  // Just calls stream()->AfterWrite()
+
  protected:
   WriteWrap(Environment* env,
             v8::Local<v8::Object> obj,
-            StreamBase* wrap,
-            DoneCb cb,
+            StreamBase* stream,
             size_t storage_size)
       : ReqWrap(env, obj, AsyncWrap::PROVIDER_WRITEWRAP),
-        StreamReq<WriteWrap>(cb),
-        wrap_(wrap),
+        StreamReq<WriteWrap>(stream),
         storage_size_(storage_size) {
     Wrap(obj, this);
+  }
+
+  ~WriteWrap() {
+    ClearWrap(object());
   }
 
   void* operator new(size_t size) = delete;
@@ -100,7 +120,6 @@ class WriteWrap: public ReqWrap<uv_write_t>,
   // WriteWrap. Ensure this never happens.
   void operator delete(void* ptr) { UNREACHABLE(); }
 
-  StreamBase* const wrap_;
   const size_t storage_size_;
 };
 
@@ -122,16 +141,20 @@ class StreamResource {
     void* ctx;
   };
 
-  typedef void (*AfterWriteCb)(WriteWrap* w, void* ctx);
+  typedef void (*AfterWriteCb)(WriteWrap* w, int status, void* ctx);
   typedef void (*AllocCb)(size_t size, uv_buf_t* buf, void* ctx);
   typedef void (*ReadCb)(ssize_t nread,
                          const uv_buf_t* buf,
                          uv_handle_type pending,
                          void* ctx);
+  typedef void (*DestructCb)(void* ctx);
 
-  StreamResource() {
+  StreamResource() : bytes_read_(0) {
   }
-  virtual ~StreamResource() = default;
+  virtual ~StreamResource() {
+    if (!destruct_cb_.is_empty())
+      destruct_cb_.fn(destruct_cb_.ctx);
+  }
 
   virtual int DoShutdown(ShutdownWrap* req_wrap) = 0;
   virtual int DoTryWrite(uv_buf_t** bufs, size_t* count);
@@ -143,19 +166,21 @@ class StreamResource {
   virtual void ClearError();
 
   // Events
-  inline void OnAfterWrite(WriteWrap* w) {
+  inline void EmitAfterWrite(WriteWrap* w, int status) {
     if (!after_write_cb_.is_empty())
-      after_write_cb_.fn(w, after_write_cb_.ctx);
+      after_write_cb_.fn(w, status, after_write_cb_.ctx);
   }
 
-  inline void OnAlloc(size_t size, uv_buf_t* buf) {
+  inline void EmitAlloc(size_t size, uv_buf_t* buf) {
     if (!alloc_cb_.is_empty())
       alloc_cb_.fn(size, buf, alloc_cb_.ctx);
   }
 
-  inline void OnRead(size_t nread,
-                     const uv_buf_t* buf,
-                     uv_handle_type pending = UV_UNKNOWN_HANDLE) {
+  inline void EmitRead(ssize_t nread,
+                       const uv_buf_t* buf,
+                       uv_handle_type pending = UV_UNKNOWN_HANDLE) {
+    if (nread > 0)
+      bytes_read_ += static_cast<uint64_t>(nread);
     if (!read_cb_.is_empty())
       read_cb_.fn(nread, buf, pending, read_cb_.ctx);
   }
@@ -166,15 +191,19 @@ class StreamResource {
 
   inline void set_alloc_cb(Callback<AllocCb> c) { alloc_cb_ = c; }
   inline void set_read_cb(Callback<ReadCb> c) { read_cb_ = c; }
+  inline void set_destruct_cb(Callback<DestructCb> c) { destruct_cb_ = c; }
 
   inline Callback<AfterWriteCb> after_write_cb() { return after_write_cb_; }
   inline Callback<AllocCb> alloc_cb() { return alloc_cb_; }
   inline Callback<ReadCb> read_cb() { return read_cb_; }
+  inline Callback<DestructCb> destruct_cb() { return destruct_cb_; }
 
- private:
+ protected:
   Callback<AfterWriteCb> after_write_cb_;
   Callback<AllocCb> alloc_cb_;
   Callback<ReadCb> read_cb_;
+  Callback<DestructCb> destruct_cb_;
+  uint64_t bytes_read_;
 };
 
 class StreamBase : public StreamResource {
@@ -190,7 +219,6 @@ class StreamBase : public StreamResource {
                                 v8::Local<v8::FunctionTemplate> target,
                                 int flags = kFlagNone);
 
-  virtual void* Cast() = 0;
   virtual bool IsAlive() = 0;
   virtual bool IsClosing() = 0;
   virtual bool IsIPCPipe();
@@ -204,12 +232,18 @@ class StreamBase : public StreamResource {
     consumed_ = true;
   }
 
-  template <class Outer>
-  inline Outer* Cast() { return static_cast<Outer*>(Cast()); }
+  inline void Unconsume() {
+    CHECK_EQ(consumed_, true);
+    consumed_ = false;
+  }
 
   void EmitData(ssize_t nread,
                 v8::Local<v8::Object> buf,
                 v8::Local<v8::Object> handle);
+
+  // These are called by the respective {Write,Shutdown}Wrap class.
+  virtual void AfterShutdown(ShutdownWrap* req, int status);
+  virtual void AfterWrite(WriteWrap* req, int status);
 
  protected:
   explicit StreamBase(Environment* env) : env_(env), consumed_(false) {
@@ -218,12 +252,8 @@ class StreamBase : public StreamResource {
   virtual ~StreamBase() = default;
 
   // One of these must be implemented
-  virtual AsyncWrap* GetAsyncWrap();
+  virtual AsyncWrap* GetAsyncWrap() = 0;
   virtual v8::Local<v8::Object> GetObject();
-
-  // Libuv callbacks
-  static void AfterShutdown(ShutdownWrap* req, int status);
-  static void AfterWrite(WriteWrap* req, int status);
 
   // JS Methods
   int ReadStart(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -235,15 +265,16 @@ class StreamBase : public StreamResource {
   int WriteString(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   template <class Base>
-  static void GetFD(v8::Local<v8::String> key,
-                    const v8::PropertyCallbackInfo<v8::Value>& args);
+  static void GetFD(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   template <class Base>
-  static void GetExternal(v8::Local<v8::String> key,
-                          const v8::PropertyCallbackInfo<v8::Value>& args);
+  static void GetExternal(const v8::FunctionCallbackInfo<v8::Value>& args);
+
+  template <class Base>
+  static void GetBytesRead(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   template <class Base,
-            int (StreamBase::*Method)(  // NOLINT(whitespace/parens)
+            int (StreamBase::*Method)(
       const v8::FunctionCallbackInfo<v8::Value>& args)>
   static void JSMethod(const v8::FunctionCallbackInfo<v8::Value>& args);
 
@@ -253,5 +284,7 @@ class StreamBase : public StreamResource {
 };
 
 }  // namespace node
+
+#endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #endif  // SRC_STREAM_BASE_H_

@@ -33,11 +33,14 @@
 #include "src/code-stubs.h"
 #include "src/factory.h"
 #include "src/macro-assembler.h"
+#include "src/objects-inl.h"
+#include "src/register-configuration.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/test-code-stubs.h"
 
-using namespace v8::internal;
-
+namespace v8 {
+namespace internal {
+namespace test_code_stubs_x64 {
 
 #define __ assm.
 
@@ -50,9 +53,9 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
       Assembler::kMinimalBufferSize, &actual_size, true));
   CHECK(buffer);
   HandleScope handles(isolate);
-  MacroAssembler assm(isolate, buffer, static_cast<int>(actual_size));
-  int offset =
-    source_reg.is(rsp) ? 0 : (HeapNumber::kValueOffset - kSmiTagSize);
+  MacroAssembler assm(isolate, buffer, static_cast<int>(actual_size),
+                      v8::internal::CodeObjectRequired::kYes);
+  int offset = source_reg == rsp ? 0 : (HeapNumber::kValueOffset - kSmiTagSize);
   DoubleToIStub stub(isolate, source_reg, destination_reg, offset, true);
   byte* start = stub.GetCode()->instruction_start();
 
@@ -62,28 +65,31 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   __ pushq(rsi);
   __ pushq(rdi);
 
-  if (!source_reg.is(rsp)) {
+  const RegisterConfiguration* config = RegisterConfiguration::Default();
+  if (source_reg != rsp) {
     // The argument we pass to the stub is not a heap number, but instead
     // stack-allocated and offset-wise made to look like a heap number for
     // the stub.  We create that "heap number" after pushing all allocatable
     // registers.
     int double_argument_slot =
-        (Register::NumAllocatableRegisters() - 1) * kPointerSize + kDoubleSize;
+        (config->num_allocatable_general_registers() - 1) * kPointerSize +
+        kDoubleSize;
     __ leaq(source_reg, MemOperand(rsp, -double_argument_slot - offset));
   }
 
   // Save registers make sure they don't get clobbered.
   int reg_num = 0;
-  for (; reg_num < Register::NumAllocatableRegisters(); ++reg_num) {
-    Register reg = Register::FromAllocationIndex(reg_num);
-    if (!reg.is(rsp) && !reg.is(rbp) && !reg.is(destination_reg)) {
+  for (; reg_num < config->num_allocatable_general_registers(); ++reg_num) {
+    Register reg =
+        Register::from_code(config->GetAllocatableGeneralCode(reg_num));
+    if (reg != rsp && reg != rbp && reg != destination_reg) {
       __ pushq(reg);
     }
   }
 
   // Put the double argument into the designated double argument slot.
   __ subq(rsp, Immediate(kDoubleSize));
-  __ movsd(MemOperand(rsp, 0), xmm0);
+  __ Movsd(MemOperand(rsp, 0), xmm0);
 
   // Call through to the actual stub
   __ Call(start, RelocInfo::EXTERNAL_REFERENCE);
@@ -92,8 +98,9 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   // Make sure no registers have been unexpectedly clobbered
   for (--reg_num; reg_num >= 0; --reg_num) {
-    Register reg = Register::FromAllocationIndex(reg_num);
-    if (!reg.is(rsp) && !reg.is(rbp) && !reg.is(destination_reg)) {
+    Register reg =
+        Register::from_code(config->GetAllocatableGeneralCode(reg_num));
+    if (reg != rsp && reg != rbp && reg != destination_reg) {
       __ cmpq(reg, MemOperand(rsp, 0));
       __ Assert(equal, kRegisterWasClobbered);
       __ addq(rsp, Immediate(kPointerSize));
@@ -111,7 +118,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   __ ret(0);
 
   CodeDesc desc;
-  assm.GetCode(&desc);
+  assm.GetCode(isolate, &desc);
   return reinterpret_cast<ConvertDToIFunc>(
       reinterpret_cast<intptr_t>(buffer));
 }
@@ -149,3 +156,7 @@ TEST(ConvertDToI) {
     }
   }
 }
+
+}  // namespace test_code_stubs_x64
+}  // namespace internal
+}  // namespace v8

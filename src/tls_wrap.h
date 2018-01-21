@@ -1,10 +1,33 @@
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 #ifndef SRC_TLS_WRAP_H_
 #define SRC_TLS_WRAP_H_
+
+#if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #include "node.h"
 #include "node_crypto.h"  // SSLWrap
 
-#include "async-wrap.h"
+#include "async_wrap.h"
 #include "env.h"
 #include "stream_wrap.h"
 #include "util.h"
@@ -12,18 +35,20 @@
 
 #include <openssl/ssl.h>
 
+#include <string>
+
 namespace node {
 
 // Forward-declarations
-class NodeBIO;
 class WriteWrap;
 namespace crypto {
-  class SecureContext;
+class SecureContext;
+class NodeBIO;
 }
 
-class TLSWrap : public crypto::SSLWrap<TLSWrap>,
-                public StreamBase,
-                public AsyncWrap {
+class TLSWrap : public AsyncWrap,
+                public crypto::SSLWrap<TLSWrap>,
+                public StreamBase {
  public:
   ~TLSWrap() override;
 
@@ -31,7 +56,6 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
                          v8::Local<v8::Value> unused,
                          v8::Local<v8::Context> context);
 
-  void* Cast() override;
   int GetFD() override;
   bool IsAlive() override;
   bool IsClosing() override;
@@ -52,6 +76,8 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
 
   size_t self_size() const override { return sizeof(*this); }
 
+  void clear_stream() { stream_ = nullptr; }
+
  protected:
   static const int kClearOutChunkSize = 16384;
 
@@ -64,19 +90,6 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
   // Maximum number of buffers passed to uv_write()
   static const int kSimultaneousBufferCount = 10;
 
-  // Write callback queue's item
-  class WriteItem {
-   public:
-    explicit WriteItem(WriteWrap* w) : w_(w) {
-    }
-    ~WriteItem() {
-      w_ = nullptr;
-    }
-
-    WriteWrap* w_;
-    ListNode<WriteItem> member_;
-  };
-
   TLSWrap(Environment* env,
           Kind kind,
           StreamBase* stream,
@@ -85,11 +98,10 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
   static void SSLInfoCallback(const SSL* ssl_, int where, int ret);
   void InitSSL();
   void EncOut();
-  static void EncOutCb(WriteWrap* req_wrap, int status);
+  void EncOutAfterWrite(WriteWrap* req_wrap, int status);
   bool ClearIn();
   void ClearOut();
-  void MakePending();
-  bool InvokeQueued(int status);
+  bool InvokeQueued(int status, const char* error_str = nullptr);
 
   inline void Cycle() {
     // Prevent recursion
@@ -107,23 +119,22 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
   bool IsIPCPipe() override;
 
   // Resource implementation
-  static void OnAfterWriteImpl(WriteWrap* w, void* ctx);
+  static void OnAfterWriteImpl(WriteWrap* w, int status, void* ctx);
   static void OnAllocImpl(size_t size, uv_buf_t* buf, void* ctx);
   static void OnReadImpl(ssize_t nread,
                          const uv_buf_t* buf,
                          uv_handle_type pending,
                          void* ctx);
-  static void OnAfterWriteSelf(WriteWrap* w, void* ctx);
   static void OnAllocSelf(size_t size, uv_buf_t* buf, void* ctx);
   static void OnReadSelf(ssize_t nread,
                          const uv_buf_t* buf,
                          uv_handle_type pending,
                          void* ctx);
+  static void OnDestructImpl(void* ctx);
 
   void DoRead(ssize_t nread, const uv_buf_t* buf, uv_handle_type pending);
 
-  // If |msg| is not nullptr, caller is responsible for calling `delete[] *msg`.
-  v8::Local<v8::Value> GetSSLError(int status, int* err, const char** msg);
+  v8::Local<v8::Value> GetSSLError(int status, int* err, std::string* msg);
 
   static void OnClientHelloParseEnd(void* arg);
   static void Wrap(const v8::FunctionCallbackInfo<v8::Value>& args);
@@ -146,23 +157,27 @@ class TLSWrap : public crypto::SSLWrap<TLSWrap>,
   StreamBase* stream_;
   BIO* enc_in_;
   BIO* enc_out_;
-  NodeBIO* clear_in_;
+  std::vector<uv_buf_t> pending_cleartext_input_;
   size_t write_size_;
-  size_t write_queue_size_;
-  typedef ListHead<WriteItem, &WriteItem::member_> WriteItemList;
-  WriteItemList write_item_queue_;
-  WriteItemList pending_write_items_;
+  WriteWrap* current_write_ = nullptr;
+  bool write_callback_scheduled_ = false;
   bool started_;
   bool established_;
   bool shutdown_;
-  const char* error_;
+  std::string error_;
   int cycle_depth_;
 
   // If true - delivered EOF to the js-land, either after `close_notify`, or
   // after the `UV_EOF` on socket.
   bool eof_;
+
+ private:
+  static void GetWriteQueueSize(
+      const v8::FunctionCallbackInfo<v8::Value>& info);
 };
 
 }  // namespace node
+
+#endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #endif  // SRC_TLS_WRAP_H_

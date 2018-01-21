@@ -27,14 +27,10 @@
   // Imports
 
   var FindScriptSourcePosition = global.Debug.findScriptSourcePosition;
-  var GetScriptBreakPoints;
   var GlobalArray = global.Array;
   var MathFloor = global.Math.floor;
+  var MathMax = global.Math.max;
   var SyntaxError = global.SyntaxError;
-
-  utils.Import(function(from) {
-    GetScriptBreakPoints = from.GetScriptBreakPoints;
-  });
 
   // -------------------------------------------------------------------
 
@@ -80,6 +76,10 @@
       }
       throw failure;
     }
+
+    var max_function_literal_id = new_compile_info.reduce(
+        (max, info) => MathMax(max, info.function_literal_id), 0);
+
     var root_new_node = BuildCodeInfoTree(new_compile_info);
 
     // Link recompiled script data with other data.
@@ -142,14 +142,17 @@
     HarvestTodo(root_old_node);
 
     // Collect shared infos for functions whose code need to be patched.
-    var replaced_function_infos = new GlobalArray();
+    var replaced_function_old_infos = new GlobalArray();
+    var replaced_function_new_infos = new GlobalArray();
     for (var i = 0; i < replace_code_list.length; i++) {
-      var live_shared_function_infos =
-          replace_code_list[i].live_shared_function_infos;
+      var old_infos = replace_code_list[i].live_shared_function_infos;
+      var new_info =
+          replace_code_list[i].corresponding_node.info.shared_function_info;
 
-      if (live_shared_function_infos) {
-        for (var j = 0; j < live_shared_function_infos.length; j++) {
-          replaced_function_infos.push(live_shared_function_infos[j]);
+      if (old_infos) {
+        for (var j = 0; j < old_infos.length; j++) {
+          replaced_function_old_infos.push(old_infos[j]);
+          replaced_function_new_infos.push(new_info);
         }
       }
     }
@@ -159,15 +162,13 @@
 
     // Check that function being patched is not currently on stack or drop them.
     var dropped_functions_number =
-        CheckStackActivations(replaced_function_infos, change_log);
+        CheckStackActivations(replaced_function_old_infos,
+                              replaced_function_new_infos,
+                              change_log);
 
     // Our current implementation requires client to manually issue "step in"
     // command for correct stack state if the stack was modified.
     preview_description.stack_modified = dropped_functions_number != 0;
-
-    // Start with breakpoints. Convert their line/column positions and
-    // temporary remove.
-    var break_points_restorer = TemporaryRemoveBreakPoints(script, change_log);
 
     var old_script;
 
@@ -181,8 +182,7 @@
 
       // Update the script text and create a new script representing an old
       // version of the script.
-      old_script = %LiveEditReplaceScript(script, new_source,
-          old_script_name);
+      old_script = %LiveEditReplaceScript(script, new_source, old_script_name);
 
       var link_to_old_script_report = new GlobalArray();
       change_log.push( { linked_to_old_script: link_to_old_script_report } );
@@ -194,12 +194,6 @@
       }
 
       preview_description.created_script_name = old_script_name;
-    }
-
-    // Link to an actual script all the functions that we are going to use.
-    for (var i = 0; i < link_to_original_script_list.length; i++) {
-      %LiveEditFunctionSetScript(
-          link_to_original_script_list[i].info.shared_function_info, script);
     }
 
     for (var i = 0; i < replace_code_list.length; i++) {
@@ -216,14 +210,24 @@
           position_patch_report);
 
       if (update_positions_list[i].live_shared_function_infos) {
-        update_positions_list[i].live_shared_function_infos.
-            forEach(function (info) {
-                %LiveEditFunctionSourceUpdated(info.raw_array);
-              });
+        var new_function_literal_id =
+            update_positions_list[i]
+                .corresponding_node.info.function_literal_id;
+        update_positions_list[i].live_shared_function_infos.forEach(function(
+            info) {
+          %LiveEditFunctionSourceUpdated(
+              info.raw_array, new_function_literal_id);
+        });
       }
     }
 
-    break_points_restorer(pos_translator, old_script);
+    %LiveEditFixupScript(script, max_function_literal_id);
+
+    // Link all the functions we're going to use to an actual script.
+    for (var i = 0; i < link_to_original_script_list.length; i++) {
+      %LiveEditFunctionSetScript(
+          link_to_original_script_list[i].info.shared_function_info, script);
+    }
 
     preview_description.updated = true;
     return preview_description;
@@ -362,79 +366,6 @@
           { name: old_info_node.info.function_name, not_found: true } );
     }
   }
-
-
-  // Returns function that restores breakpoints.
-  function TemporaryRemoveBreakPoints(original_script, change_log) {
-    var script_break_points = GetScriptBreakPoints(original_script);
-
-    var break_points_update_report = [];
-    change_log.push( { break_points_update: break_points_update_report } );
-
-    var break_point_old_positions = [];
-    for (var i = 0; i < script_break_points.length; i++) {
-      var break_point = script_break_points[i];
-
-      break_point.clear();
-
-      // TODO(LiveEdit): be careful with resource offset here.
-      var break_point_position = FindScriptSourcePosition(original_script,
-          break_point.line(), break_point.column());
-
-      var old_position_description = {
-          position: break_point_position,
-          line: break_point.line(),
-          column: break_point.column()
-      };
-      break_point_old_positions.push(old_position_description);
-    }
-
-
-    // Restores breakpoints and creates their copies in the "old" copy of
-    // the script.
-    return function (pos_translator, old_script_copy_opt) {
-      // Update breakpoints (change positions and restore them in old version
-      // of script.
-      for (var i = 0; i < script_break_points.length; i++) {
-        var break_point = script_break_points[i];
-        if (old_script_copy_opt) {
-          var clone = break_point.cloneForOtherScript(old_script_copy_opt);
-          clone.set(old_script_copy_opt);
-
-          break_points_update_report.push( {
-            type: "copied_to_old",
-            id: break_point.number(),
-            new_id: clone.number(),
-            positions: break_point_old_positions[i]
-            } );
-        }
-
-        var updated_position = pos_translator.Translate(
-            break_point_old_positions[i].position,
-            PosTranslator.ShiftWithTopInsideChunkHandler);
-
-        var new_location =
-            original_script.locationFromPosition(updated_position, false);
-
-        break_point.update_positions(new_location.line, new_location.column);
-
-        var new_position_description = {
-            position: updated_position,
-            line: new_location.line,
-            column: new_location.column
-        };
-
-        break_point.set(original_script);
-
-        break_points_update_report.push( { type: "position_changed",
-          id: break_point.number(),
-          old_positions: break_point_old_positions[i],
-          new_positions: new_position_description
-          } );
-      }
-    };
-  }
-
 
   function Assert(condition, message) {
     if (!condition) {
@@ -737,6 +668,8 @@
                   old_children[old_index].corresponding_node = UNDEFINED;
                   old_node.status = FunctionStatus.CHANGED;
                 }
+              } else {
+                ProcessNode(old_children[old_index], new_children[new_index]);
               }
             } else {
               old_children[old_index].status = FunctionStatus.DAMAGED;
@@ -837,11 +770,10 @@
     this.start_position = raw_array[1];
     this.end_position = raw_array[2];
     this.param_num = raw_array[3];
-    this.code = raw_array[4];
-    this.code_scope_info = raw_array[5];
-    this.scope_info = raw_array[6];
-    this.outer_index = raw_array[7];
-    this.shared_function_info = raw_array[8];
+    this.scope_info = raw_array[4];
+    this.outer_index = raw_array[5];
+    this.shared_function_info = raw_array[6];
+    this.function_literal_id = raw_array[7];
     this.next_sibling_index = null;
     this.raw_array = raw_array;
   }
@@ -910,21 +842,24 @@
   // For array of wrapped shared function infos checks that none of them
   // have activations on stack (of any thread). Throws a Failure exception
   // if this proves to be false.
-  function CheckStackActivations(shared_wrapper_list, change_log) {
-    var shared_list = new GlobalArray();
-    for (var i = 0; i < shared_wrapper_list.length; i++) {
-      shared_list[i] = shared_wrapper_list[i].info;
+  function CheckStackActivations(old_shared_wrapper_list,
+                                 new_shared_list,
+                                 change_log) {
+    var old_shared_list = new GlobalArray();
+    for (var i = 0; i < old_shared_wrapper_list.length; i++) {
+      old_shared_list[i] = old_shared_wrapper_list[i].info;
     }
-    var result = %LiveEditCheckAndDropActivations(shared_list, true);
-    if (result[shared_list.length]) {
+    var result = %LiveEditCheckAndDropActivations(
+                     old_shared_list, new_shared_list, true);
+    if (result[old_shared_wrapper_list.length]) {
       // Extra array element may contain error message.
-      throw new Failure(result[shared_list.length]);
+      throw new Failure(result[old_shared_wrapper_list.length]);
     }
 
     var problems = new GlobalArray();
     var dropped = new GlobalArray();
-    for (var i = 0; i < shared_list.length; i++) {
-      var shared = shared_wrapper_list[i];
+    for (var i = 0; i < old_shared_list.length; i++) {
+      var shared = old_shared_wrapper_list[i];
       if (result[i] == FunctionPatchabilityStatus.REPLACED_ON_ACTIVE_STACK) {
         dropped.push({ name: shared.function_name } );
       } else if (result[i] != FunctionPatchabilityStatus.AVAILABLE_FOR_PATCH) {
@@ -957,7 +892,8 @@
       BLOCKED_UNDER_NATIVE_CODE: 4,
       REPLACED_ON_ACTIVE_STACK: 5,
       BLOCKED_UNDER_GENERATOR: 6,
-      BLOCKED_ACTIVE_GENERATOR: 7
+      BLOCKED_ACTIVE_GENERATOR: 7,
+      BLOCKED_NO_NEW_TARGET_ON_RESTART: 8
   };
 
   FunctionPatchabilityStatus.SymbolName = function(code) {
@@ -1003,11 +939,6 @@
       end: createPositionStruct(script, e.endPosition)
     };
     details.position = position_struct;
-  }
-
-  // A testing entry.
-  function GetPcFromSourcePos(func, source_pos) {
-    return %GetFunctionCodePositionFromSource(func, source_pos);
   }
 
   // LiveEdit main entry point: changes a script text to a new string.
@@ -1110,13 +1041,17 @@
   LiveEdit.SetScriptSource = SetScriptSource;
   LiveEdit.ApplyPatchMultiChunk = ApplyPatchMultiChunk;
   LiveEdit.Failure = Failure;
-  LiveEdit.GetPcFromSourcePos = GetPcFromSourcePos;
 
   LiveEdit.TestApi = {
     PosTranslator: PosTranslator,
     CompareStrings: CompareStrings,
     ApplySingleChunkPatch: ApplySingleChunkPatch
   };
+
+  // Functions needed by the debugger runtime.
+  utils.InstallConstants(utils, [
+    "SetScriptSource", LiveEdit.SetScriptSource,
+  ]);
 
   global.Debug.LiveEdit = LiveEdit;
 

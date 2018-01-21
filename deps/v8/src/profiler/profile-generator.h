@@ -6,16 +6,18 @@
 #define V8_PROFILER_PROFILE_GENERATOR_H_
 
 #include <map>
-#include "include/v8-profiler.h"
+#include <vector>
+
 #include "src/allocation.h"
-#include "src/compiler.h"
-#include "src/hashmap.h"
-#include "src/strings-storage.h"
+#include "src/base/hashmap.h"
+#include "src/log.h"
+#include "src/profiler/strings-storage.h"
+#include "src/source-position.h"
 
 namespace v8 {
 namespace internal {
 
-struct OffsetRange;
+struct TickSample;
 
 // Provides a mapping from the offsets within generated code to
 // the source line.
@@ -40,7 +42,7 @@ class JITLineInfoTable : public Malloced {
 class CodeEntry {
  public:
   // CodeEntry doesn't own name strings, just references them.
-  inline CodeEntry(Logger::LogEventsAndTags tag, const char* name,
+  inline CodeEntry(CodeEventListener::LogEventsAndTags tag, const char* name,
                    const char* name_prefix = CodeEntry::kEmptyNamePrefix,
                    const char* resource_name = CodeEntry::kEmptyResourceName,
                    int line_number = v8::CpuProfileNode::kNoLineNumberInfo,
@@ -65,35 +67,19 @@ class CodeEntry {
   }
   const char* bailout_reason() const { return bailout_reason_; }
 
-  void set_deopt_info(const char* deopt_reason, SourcePosition position,
-                      size_t pc_offset) {
-    DCHECK(deopt_position_.IsUnknown());
+  void set_deopt_info(const char* deopt_reason, int deopt_id) {
+    DCHECK(!has_deopt_info());
     deopt_reason_ = deopt_reason;
-    deopt_position_ = position;
-    pc_offset_ = pc_offset;
+    deopt_id_ = deopt_id;
   }
   CpuProfileDeoptInfo GetDeoptInfo();
-  const char* deopt_reason() const { return deopt_reason_; }
-  SourcePosition deopt_position() const { return deopt_position_; }
-  bool has_deopt_info() const { return !deopt_position_.IsUnknown(); }
+  bool has_deopt_info() const { return deopt_id_ != kNoDeoptimizationId; }
   void clear_deopt_info() {
     deopt_reason_ = kNoDeoptReason;
-    deopt_position_ = SourcePosition::Unknown();
+    deopt_id_ = kNoDeoptimizationId;
   }
 
   void FillFunctionInfo(SharedFunctionInfo* shared);
-
-  List<OffsetRange>* no_frame_ranges() const { return no_frame_ranges_; }
-  void set_no_frame_ranges(List<OffsetRange>* ranges) {
-    no_frame_ranges_ = ranges;
-  }
-  void set_inlined_function_infos(
-      const std::vector<InlinedFunctionInfo>& infos) {
-    inlined_function_infos_ = infos;
-  }
-  const std::vector<InlinedFunctionInfo> inlined_function_infos() {
-    return inlined_function_infos_;
-  }
 
   void SetBuiltinId(Builtins::Name id);
   Builtins::Name builtin_id() const {
@@ -105,17 +91,63 @@ class CodeEntry {
 
   int GetSourceLine(int pc_offset) const;
 
+  void AddInlineStack(int pc_offset, std::vector<CodeEntry*> inline_stack);
+  const std::vector<CodeEntry*>* GetInlineStack(int pc_offset) const;
+
+  void AddDeoptInlinedFrames(int deopt_id, std::vector<CpuProfileDeoptFrame>);
+  bool HasDeoptInlinedFramesFor(int deopt_id) const;
+
   Address instruction_start() const { return instruction_start_; }
+  CodeEventListener::LogEventsAndTags tag() const {
+    return TagField::decode(bit_field_);
+  }
 
   static const char* const kEmptyNamePrefix;
   static const char* const kEmptyResourceName;
   static const char* const kEmptyBailoutReason;
   static const char* const kNoDeoptReason;
 
+  static const char* const kProgramEntryName;
+  static const char* const kIdleEntryName;
+  static const char* const kGarbageCollectorEntryName;
+  // Used to represent frames for which we have no reliable way to
+  // detect function.
+  static const char* const kUnresolvedFunctionName;
+
+  V8_INLINE static CodeEntry* program_entry() {
+    return kProgramEntry.Pointer();
+  }
+  V8_INLINE static CodeEntry* idle_entry() { return kIdleEntry.Pointer(); }
+  V8_INLINE static CodeEntry* gc_entry() { return kGCEntry.Pointer(); }
+  V8_INLINE static CodeEntry* unresolved_entry() {
+    return kUnresolvedEntry.Pointer();
+  }
+
  private:
+  struct ProgramEntryCreateTrait {
+    static CodeEntry* Create();
+  };
+  struct IdleEntryCreateTrait {
+    static CodeEntry* Create();
+  };
+  struct GCEntryCreateTrait {
+    static CodeEntry* Create();
+  };
+  struct UnresolvedEntryCreateTrait {
+    static CodeEntry* Create();
+  };
+
+  static base::LazyDynamicInstance<CodeEntry, ProgramEntryCreateTrait>::type
+      kProgramEntry;
+  static base::LazyDynamicInstance<CodeEntry, IdleEntryCreateTrait>::type
+      kIdleEntry;
+  static base::LazyDynamicInstance<CodeEntry, GCEntryCreateTrait>::type
+      kGCEntry;
+  static base::LazyDynamicInstance<CodeEntry, UnresolvedEntryCreateTrait>::type
+      kUnresolvedEntry;
+
   class TagField : public BitField<Logger::LogEventsAndTags, 0, 8> {};
-  class BuiltinIdField : public BitField<Builtins::Name, 8, 8> {};
-  Logger::LogEventsAndTags tag() const { return TagField::decode(bit_field_); }
+  class BuiltinIdField : public BitField<Builtins::Name, 8, 24> {};
 
   uint32_t bit_field_;
   const char* name_prefix_;
@@ -125,15 +157,14 @@ class CodeEntry {
   int column_number_;
   int script_id_;
   int position_;
-  List<OffsetRange>* no_frame_ranges_;
   const char* bailout_reason_;
   const char* deopt_reason_;
-  SourcePosition deopt_position_;
-  size_t pc_offset_;
+  int deopt_id_;
   JITLineInfoTable* line_info_;
   Address instruction_start_;
-
-  std::vector<InlinedFunctionInfo> inlined_function_infos_;
+  // Should be an unordered_map, but it doesn't currently work on Win & MacOS.
+  std::map<int, std::vector<CodeEntry*>> inline_locations_;
+  std::map<int, std::vector<CpuProfileDeoptFrame>> deopt_inlined_frames_;
 
   DISALLOW_COPY_AND_ASSIGN(CodeEntry);
 };
@@ -143,7 +174,7 @@ class ProfileTree;
 
 class ProfileNode {
  public:
-  inline ProfileNode(ProfileTree* tree, CodeEntry* entry);
+  inline ProfileNode(ProfileTree* tree, CodeEntry* entry, ProfileNode* parent);
 
   ProfileNode* FindChild(CodeEntry* entry);
   ProfileNode* FindOrAddChild(CodeEntry* entry);
@@ -153,9 +184,10 @@ class ProfileNode {
 
   CodeEntry* entry() const { return entry_; }
   unsigned self_ticks() const { return self_ticks_; }
-  const List<ProfileNode*>* children() const { return &children_list_; }
+  const std::vector<ProfileNode*>* children() const { return &children_list_; }
   unsigned id() const { return id_; }
   unsigned function_id() const;
+  ProfileNode* parent() const { return parent_; }
   unsigned int GetHitLineCount() const { return line_ticks_.occupancy(); }
   bool GetLineTicks(v8::CpuProfileNode::LineTick* entries,
                     unsigned int length) const;
@@ -163,6 +195,7 @@ class ProfileNode {
   const std::vector<CpuProfileDeoptInfo>& deopt_infos() const {
     return deopt_infos_;
   }
+  Isolate* isolate() const;
 
   void Print(int indent);
 
@@ -180,10 +213,11 @@ class ProfileNode {
   CodeEntry* entry_;
   unsigned self_ticks_;
   // Mapping from CodeEntry* to ProfileNode*
-  HashMap children_;
-  List<ProfileNode*> children_list_;
+  base::CustomMatcherHashMap children_;
+  std::vector<ProfileNode*> children_list_;
+  ProfileNode* parent_;
   unsigned id_;
-  HashMap line_ticks_;
+  base::CustomMatcherHashMap line_ticks_;
 
   std::vector<CpuProfileDeoptInfo> deopt_infos_;
 
@@ -193,12 +227,13 @@ class ProfileNode {
 
 class ProfileTree {
  public:
-  ProfileTree();
+  explicit ProfileTree(Isolate* isolate);
   ~ProfileTree();
 
   ProfileNode* AddPathFromEnd(
-      const Vector<CodeEntry*>& path,
-      int src_line = v8::CpuProfileNode::kNoLineNumberInfo);
+      const std::vector<CodeEntry*>& path,
+      int src_line = v8::CpuProfileNode::kNoLineNumberInfo,
+      bool update_stats = true);
   ProfileNode* root() const { return root_; }
   unsigned next_node_id() { return next_node_id_++; }
   unsigned GetFunctionId(const ProfileNode* node);
@@ -207,16 +242,27 @@ class ProfileTree {
     root_->Print(0);
   }
 
+  Isolate* isolate() const { return isolate_; }
+
+  void EnqueueNode(const ProfileNode* node) { pending_nodes_.push_back(node); }
+  size_t pending_nodes_count() const { return pending_nodes_.size(); }
+  std::vector<const ProfileNode*> TakePendingNodes() {
+    return std::move(pending_nodes_);
+  }
+
  private:
   template <typename Callback>
   void TraverseDepthFirst(Callback* callback);
 
+  std::vector<const ProfileNode*> pending_nodes_;
+
   CodeEntry root_entry_;
   unsigned next_node_id_;
   ProfileNode* root_;
+  Isolate* isolate_;
 
   unsigned next_function_id_;
-  HashMap function_ids_;
+  base::CustomMatcherHashMap function_ids_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileTree);
 };
@@ -224,17 +270,17 @@ class ProfileTree {
 
 class CpuProfile {
  public:
-  CpuProfile(const char* title, bool record_samples);
+  CpuProfile(CpuProfiler* profiler, const char* title, bool record_samples);
 
   // Add pc -> ... -> main() call path to the profile.
-  void AddPath(base::TimeTicks timestamp, const Vector<CodeEntry*>& path,
-               int src_line);
-  void CalculateTotalTicksAndSamplingRate();
+  void AddPath(base::TimeTicks timestamp, const std::vector<CodeEntry*>& path,
+               int src_line, bool update_stats);
+  void FinishProfile();
 
   const char* title() const { return title_; }
   const ProfileTree* top_down() const { return &top_down_; }
 
-  int samples_count() const { return samples_.length(); }
+  int samples_count() const { return static_cast<int>(samples_.size()); }
   ProfileNode* sample(int index) const { return samples_.at(index); }
   base::TimeTicks sample_timestamp(int index) const {
     return timestamps_.at(index);
@@ -242,33 +288,35 @@ class CpuProfile {
 
   base::TimeTicks start_time() const { return start_time_; }
   base::TimeTicks end_time() const { return end_time_; }
+  CpuProfiler* cpu_profiler() const { return profiler_; }
 
   void UpdateTicksScale();
 
   void Print();
 
  private:
+  void StreamPendingTraceEvents();
+
   const char* title_;
   bool record_samples_;
   base::TimeTicks start_time_;
   base::TimeTicks end_time_;
-  List<ProfileNode*> samples_;
-  List<base::TimeTicks> timestamps_;
+  std::vector<ProfileNode*> samples_;
+  std::vector<base::TimeTicks> timestamps_;
   ProfileTree top_down_;
+  CpuProfiler* const profiler_;
+  size_t streaming_next_sample_;
 
   DISALLOW_COPY_AND_ASSIGN(CpuProfile);
 };
 
-
 class CodeMap {
  public:
   CodeMap() {}
-  ~CodeMap();
+
   void AddCode(Address addr, CodeEntry* entry, unsigned size);
   void MoveCode(Address from, Address to);
   CodeEntry* FindEntry(Address addr);
-  int GetSharedId(Address addr);
-
   void Print();
 
  private:
@@ -279,75 +327,41 @@ class CodeMap {
     unsigned size;
   };
 
-  struct CodeTreeConfig {
-    typedef Address Key;
-    typedef CodeEntryInfo Value;
-    static const Key kNoKey;
-    static const Value NoValue() { return CodeEntryInfo(NULL, 0); }
-    static int Compare(const Key& a, const Key& b) {
-      return a < b ? -1 : (a > b ? 1 : 0);
-    }
-  };
-  typedef SplayTree<CodeTreeConfig> CodeTree;
-
-  class CodeTreePrinter {
-   public:
-    void Call(const Address& key, const CodeEntryInfo& value);
-  };
-
   void DeleteAllCoveredCode(Address start, Address end);
 
-  CodeTree tree_;
+  std::map<Address, CodeEntryInfo> code_map_;
 
   DISALLOW_COPY_AND_ASSIGN(CodeMap);
 };
 
-
 class CpuProfilesCollection {
  public:
-  explicit CpuProfilesCollection(Heap* heap);
+  explicit CpuProfilesCollection(Isolate* isolate);
   ~CpuProfilesCollection();
 
+  void set_cpu_profiler(CpuProfiler* profiler) { profiler_ = profiler; }
   bool StartProfiling(const char* title, bool record_samples);
   CpuProfile* StopProfiling(const char* title);
-  List<CpuProfile*>* profiles() { return &finished_profiles_; }
-  const char* GetName(Name* name) {
-    return function_and_resource_names_.GetName(name);
-  }
-  const char* GetName(int args_count) {
-    return function_and_resource_names_.GetName(args_count);
-  }
-  const char* GetFunctionName(Name* name) {
-    return function_and_resource_names_.GetFunctionName(name);
-  }
-  const char* GetFunctionName(const char* name) {
-    return function_and_resource_names_.GetFunctionName(name);
-  }
+  std::vector<CpuProfile*>* profiles() { return &finished_profiles_; }
+  const char* GetName(Name* name) { return resource_names_.GetName(name); }
   bool IsLastProfile(const char* title);
   void RemoveProfile(CpuProfile* profile);
 
-  CodeEntry* NewCodeEntry(
-      Logger::LogEventsAndTags tag, const char* name,
-      const char* name_prefix = CodeEntry::kEmptyNamePrefix,
-      const char* resource_name = CodeEntry::kEmptyResourceName,
-      int line_number = v8::CpuProfileNode::kNoLineNumberInfo,
-      int column_number = v8::CpuProfileNode::kNoColumnNumberInfo,
-      JITLineInfoTable* line_info = NULL, Address instruction_start = NULL);
-
   // Called from profile generator thread.
   void AddPathToCurrentProfiles(base::TimeTicks timestamp,
-                                const Vector<CodeEntry*>& path, int src_line);
+                                const std::vector<CodeEntry*>& path,
+                                int src_line, bool update_stats);
 
   // Limits the number of profiles that can be simultaneously collected.
   static const int kMaxSimultaneousProfiles = 100;
 
  private:
-  StringsStorage function_and_resource_names_;
-  List<CodeEntry*> code_entries_;
-  List<CpuProfile*> finished_profiles_;
+  StringsStorage resource_names_;
+  std::vector<CpuProfile*> finished_profiles_;
+  CpuProfiler* profiler_;
 
   // Accessed by VM thread and profile generator thread.
-  List<CpuProfile*> current_profiles_;
+  std::vector<CpuProfile*> current_profiles_;
   base::Semaphore current_profiles_semaphore_;
 
   DISALLOW_COPY_AND_ASSIGN(CpuProfilesCollection);
@@ -362,27 +376,18 @@ class ProfileGenerator {
 
   CodeMap* code_map() { return &code_map_; }
 
-  static const char* const kProgramEntryName;
-  static const char* const kIdleEntryName;
-  static const char* const kGarbageCollectorEntryName;
-  // Used to represent frames for which we have no reliable way to
-  // detect function.
-  static const char* const kUnresolvedFunctionName;
-
  private:
+  CodeEntry* FindEntry(void* address);
   CodeEntry* EntryForVMState(StateTag tag);
 
   CpuProfilesCollection* profiles_;
   CodeMap code_map_;
-  CodeEntry* program_entry_;
-  CodeEntry* idle_entry_;
-  CodeEntry* gc_entry_;
-  CodeEntry* unresolved_entry_;
 
   DISALLOW_COPY_AND_ASSIGN(ProfileGenerator);
 };
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_PROFILER_PROFILE_GENERATOR_H_

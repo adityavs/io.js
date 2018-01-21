@@ -68,7 +68,9 @@ static uint64_t ReadUInt64(Vector<const char> buffer,
                            int from,
                            int digits_to_read) {
   uint64_t result = 0;
-  for (int i = from; i < from + digits_to_read; ++i) {
+  int to = from + digits_to_read;
+
+  for (int i = from; i < to; ++i) {
     int digit = buffer[i] - '0';
     DCHECK(0 <= digit && digit <= 9);
     result = result * 10 + digit;
@@ -103,7 +105,6 @@ static int HexCharValue(char c) {
   if ('a' <= c && c <= 'f') return 10 + c - 'a';
   if ('A' <= c && c <= 'F') return 10 + c - 'A';
   UNREACHABLE();
-  return 0;  // To make compiler happy.
 }
 
 
@@ -534,13 +535,6 @@ static int SizeInHexChars(S number) {
     result++;
   }
   return result;
-}
-
-
-static char HexCharOfValue(int value) {
-  DCHECK(0 <= value && value <= 16);
-  if (value < 10) return value + '0';
-  return value - 10 + 'A';
 }
 
 

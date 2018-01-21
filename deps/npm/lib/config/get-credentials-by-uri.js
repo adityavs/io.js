@@ -20,6 +20,14 @@ function getCredentialsByURI (uri) {
     alwaysAuth: undefined
   }
 
+  // used to override scope matching for tokens as well as legacy auth
+  if (this.get(nerfed + ':always-auth') !== undefined) {
+    var val = this.get(nerfed + ':always-auth')
+    c.alwaysAuth = val === 'false' ? false : !!val
+  } else if (this.get('always-auth') !== undefined) {
+    c.alwaysAuth = this.get('always-auth')
+  }
+
   if (this.get(nerfed + ':_authToken')) {
     c.token = this.get(nerfed + ':_authToken')
     // the bearer token is enough, don't confuse things
@@ -28,8 +36,6 @@ function getCredentialsByURI (uri) {
 
   // Handle the old-style _auth=<base64> style for the default
   // registry, if set.
-  //
-  // XXX(isaacs): Remove when npm 1.4 is no longer relevant
   var authDef = this.get('_auth')
   var userDef = this.get('username')
   var passDef = this.get('_password')
@@ -56,13 +62,6 @@ function getCredentialsByURI (uri) {
     c.email = this.get(nerfed + ':email')
   } else if (this.get('email')) {
     c.email = this.get('email')
-  }
-
-  if (this.get(nerfed + ':always-auth') !== undefined) {
-    var val = this.get(nerfed + ':always-auth')
-    c.alwaysAuth = val === 'false' ? false : !!val
-  } else if (this.get('always-auth') !== undefined) {
-    c.alwaysAuth = this.get('always-auth')
   }
 
   if (c.username && c.password) {

@@ -7,8 +7,6 @@
 #define V8_REGEXP_JSREGEXP_INL_H_
 
 #include "src/allocation.h"
-#include "src/handles.h"
-#include "src/heap/heap.h"
 #include "src/objects.h"
 #include "src/regexp/jsregexp.h"
 
@@ -47,7 +45,10 @@ int32_t* RegExpImpl::GlobalCache::FetchNext() {
                                              register_array_size_);
     } else {
       int last_start_index = last_match[0];
-      if (last_start_index == last_end_index) last_end_index++;
+      if (last_start_index == last_end_index) {
+        // Zero-length match. Advance by one code point.
+        last_end_index = AdvanceZeroLength(last_end_index);
+      }
       if (last_end_index > subject_->length()) {
         num_matches_ = 0;  // Signal failed match.
         return NULL;
@@ -78,6 +79,7 @@ int32_t* RegExpImpl::GlobalCache::LastSuccessfulMatch() {
 }
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_REGEXP_JSREGEXP_INL_H_

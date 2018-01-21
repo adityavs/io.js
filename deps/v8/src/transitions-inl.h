@@ -7,10 +7,31 @@
 
 #include "src/transitions.h"
 
+#include "src/ic/handler-configuration-inl.h"
+
 namespace v8 {
 namespace internal {
 
+template <TransitionsAccessor::Encoding enc>
+WeakCell* TransitionsAccessor::GetTargetCell() {
+  DCHECK(!needs_reload_);
+  if (target_cell_ != nullptr) return target_cell_;
+  if (enc == kWeakCell) {
+    target_cell_ = WeakCell::cast(raw_transitions_);
+  } else if (enc == kHandler) {
+    target_cell_ = StoreHandler::GetTransitionCell(raw_transitions_);
+  } else {
+    UNREACHABLE();
+  }
+  return target_cell_;
+}
 
+TransitionArray* TransitionsAccessor::transitions() {
+  DCHECK_EQ(kFullTransitionArray, encoding());
+  return TransitionArray::cast(raw_transitions_);
+}
+
+// static
 TransitionArray* TransitionArray::cast(Object* object) {
   DCHECK(object->IsTransitionArray());
   return reinterpret_cast<TransitionArray*>(object);
@@ -18,7 +39,7 @@ TransitionArray* TransitionArray::cast(Object* object) {
 
 
 bool TransitionArray::HasPrototypeTransitions() {
-  return get(kPrototypeTransitionsIndex) != Smi::FromInt(0);
+  return get(kPrototypeTransitionsIndex) != Smi::kZero;
 }
 
 
@@ -29,10 +50,9 @@ FixedArray* TransitionArray::GetPrototypeTransitions() {
 }
 
 
-void TransitionArray::SetPrototypeTransitions(FixedArray* transitions,
-                                              WriteBarrierMode mode) {
+void TransitionArray::SetPrototypeTransitions(FixedArray* transitions) {
   DCHECK(transitions->IsFixedArray());
-  set(kPrototypeTransitionsIndex, transitions, mode);
+  set(kPrototypeTransitionsIndex, transitions);
 }
 
 
@@ -52,62 +72,94 @@ Name* TransitionArray::GetKey(int transition_number) {
   return Name::cast(get(ToKeyIndex(transition_number)));
 }
 
-
-Name* TransitionArray::GetKey(Object* raw_transitions, int transition_number) {
-  if (IsSimpleTransition(raw_transitions)) {
-    DCHECK(transition_number == 0);
-    return GetSimpleTransitionKey(GetSimpleTransition(raw_transitions));
+Name* TransitionsAccessor::GetKey(int transition_number) {
+  WeakCell* cell = nullptr;
+  switch (encoding()) {
+    case kPrototypeInfo:
+    case kUninitialized:
+      UNREACHABLE();
+      return nullptr;
+    case kWeakCell:
+      cell = GetTargetCell<kWeakCell>();
+      break;
+    case kHandler:
+      cell = GetTargetCell<kHandler>();
+      break;
+    case kFullTransitionArray:
+      return transitions()->GetKey(transition_number);
   }
-  DCHECK(IsFullTransitionArray(raw_transitions));
-  return TransitionArray::cast(raw_transitions)->GetKey(transition_number);
+  DCHECK(!cell->cleared());
+  return GetSimpleTransitionKey(Map::cast(cell->value()));
 }
-
 
 void TransitionArray::SetKey(int transition_number, Name* key) {
   DCHECK(transition_number < number_of_transitions());
   set(ToKeyIndex(transition_number), key);
 }
 
+Object** TransitionArray::GetTargetSlot(int transition_number) {
+  DCHECK(transition_number < number_of_transitions());
+  return RawFieldOfElementAt(ToTargetIndex(transition_number));
+}
+
+// static
+PropertyDetails TransitionsAccessor::GetTargetDetails(Name* name, Map* target) {
+  DCHECK(!IsSpecialTransition(name));
+  int descriptor = target->LastAdded();
+  DescriptorArray* descriptors = target->instance_descriptors();
+  // Transitions are allowed only for the last added property.
+  DCHECK(descriptors->GetKey(descriptor)->Equals(name));
+  return descriptors->GetDetails(descriptor);
+}
+
+// static
+Map* TransitionsAccessor::GetTargetFromRaw(Object* raw) {
+  if (raw->IsWeakCell()) return Map::cast(WeakCell::cast(raw)->value());
+  return Map::cast(StoreHandler::GetTransitionCell(raw)->value());
+}
+
+Object* TransitionArray::GetRawTarget(int transition_number) {
+  DCHECK(transition_number < number_of_transitions());
+  return get(ToTargetIndex(transition_number));
+}
 
 Map* TransitionArray::GetTarget(int transition_number) {
-  DCHECK(transition_number < number_of_transitions());
-  return Map::cast(get(ToTargetIndex(transition_number)));
+  Object* raw = GetRawTarget(transition_number);
+  return TransitionsAccessor::GetTargetFromRaw(raw);
 }
 
-
-Map* TransitionArray::GetTarget(Object* raw_transitions,
-                                int transition_number) {
-  if (IsSimpleTransition(raw_transitions)) {
-    DCHECK(transition_number == 0);
-    return GetSimpleTransition(raw_transitions);
+Map* TransitionsAccessor::GetTarget(int transition_number) {
+  WeakCell* cell = nullptr;
+  switch (encoding()) {
+    case kPrototypeInfo:
+    case kUninitialized:
+      UNREACHABLE();
+      return nullptr;
+    case kWeakCell:
+      cell = GetTargetCell<kWeakCell>();
+      break;
+    case kHandler:
+      cell = GetTargetCell<kHandler>();
+      break;
+    case kFullTransitionArray:
+      return transitions()->GetTarget(transition_number);
   }
-  DCHECK(IsFullTransitionArray(raw_transitions));
-  return TransitionArray::cast(raw_transitions)->GetTarget(transition_number);
+  DCHECK(!cell->cleared());
+  return Map::cast(cell->value());
 }
 
-
-void TransitionArray::SetTarget(int transition_number, Map* value) {
+void TransitionArray::SetTarget(int transition_number, Object* value) {
+  DCHECK(!value->IsMap());
   DCHECK(transition_number < number_of_transitions());
   set(ToTargetIndex(transition_number), value);
 }
 
 
 int TransitionArray::SearchName(Name* name, int* out_insertion_index) {
-  return internal::Search<ALL_ENTRIES>(this, name, 0, out_insertion_index);
+  DCHECK(name->IsUniqueName());
+  return internal::Search<ALL_ENTRIES>(this, name, number_of_entries(),
+                                       out_insertion_index);
 }
-
-
-#ifdef DEBUG
-bool TransitionArray::IsSpecialTransition(Name* name) {
-  if (!name->IsSymbol()) return false;
-  Heap* heap = name->GetHeap();
-  return name == heap->nonextensible_symbol() ||
-         name == heap->sealed_symbol() || name == heap->frozen_symbol() ||
-         name == heap->elements_transition_symbol() ||
-         name == heap->observed_symbol();
-}
-#endif
-
 
 int TransitionArray::CompareKeys(Name* key1, uint32_t hash1, PropertyKind kind1,
                                  PropertyAttributes attributes1, Name* key2,
@@ -119,7 +171,6 @@ int TransitionArray::CompareKeys(Name* key1, uint32_t hash1, PropertyKind kind1,
   return CompareDetails(kind1, attributes1, kind2, attributes2);
 }
 
-
 int TransitionArray::CompareNames(Name* key1, uint32_t hash1, Name* key2,
                                   uint32_t hash2) {
   if (key1 != key2) {
@@ -129,7 +180,6 @@ int TransitionArray::CompareNames(Name* key1, uint32_t hash1, Name* key2,
 
   return 0;
 }
-
 
 int TransitionArray::CompareDetails(PropertyKind kind1,
                                     PropertyAttributes attributes1,
@@ -147,32 +197,22 @@ int TransitionArray::CompareDetails(PropertyKind kind1,
   return 0;
 }
 
-
-PropertyDetails TransitionArray::GetTargetDetails(Name* name, Map* target) {
-  DCHECK(!IsSpecialTransition(name));
-  int descriptor = target->LastAdded();
-  DescriptorArray* descriptors = target->instance_descriptors();
-  // Transitions are allowed only for the last added property.
-  DCHECK(descriptors->GetKey(descriptor)->Equals(name));
-  return descriptors->GetDetails(descriptor);
+void TransitionArray::Set(int transition_number, Name* key, Object* target) {
+  set(ToKeyIndex(transition_number), key);
+  set(ToTargetIndex(transition_number), target);
 }
 
-
-void TransitionArray::NoIncrementalWriteBarrierSet(int transition_number,
-                                                   Name* key,
-                                                   Map* target) {
-  FixedArray::NoIncrementalWriteBarrierSet(
-      this, ToKeyIndex(transition_number), key);
-  FixedArray::NoIncrementalWriteBarrierSet(
-      this, ToTargetIndex(transition_number), target);
+int TransitionArray::Capacity() {
+  if (length() <= kFirstIndex) return 0;
+  return (length() - kFirstIndex) / kTransitionSize;
 }
-
 
 void TransitionArray::SetNumberOfTransitions(int number_of_transitions) {
-  DCHECK(number_of_transitions <= Capacity(this));
+  DCHECK(number_of_transitions <= Capacity());
   set(kTransitionLengthIndex, Smi::FromInt(number_of_transitions));
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_TRANSITIONS_INL_H_

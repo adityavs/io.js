@@ -27,6 +27,8 @@
   | linux     | arm64      | linux-aarch64        | o   |
   | linux     | ppc        | linux-ppc            | o   |
   | linux     | ppc64      | linux-ppc64          | o   |
+  | linux     | s390       | linux32-s390x        | o   |
+  | linux     | s390x      | linux64-s390x        | o   |
   | mac       | ia32       | darwin-i386-cc       | o   |
   | mac       | x64        | darwin64-x86-cc      | o   |
   | win       | ia32       | VC-WIN32             | -   |
@@ -35,6 +37,8 @@
   | solaris   | x64        | solaris64-x86_64-gcc | o   |
   | freebsd   | ia32       | BSD-x86              | o   |
   | freebsd   | x64        | BSD-x86_64           | o   |
+  | netbsd    | ia32       | BSD-x86              | o   |
+  | netbsd    | x64        | BSD-x86_64           | o   |
   | openbsd   | ia32       | BSD-x86              | -   |
   | openbsd   | x64        | BSD-x86_64           | -   |
   | others    | others     | linux-elf            | -   |
@@ -49,6 +53,7 @@
   | mac                | __APPLE__ && __MACH__     |
   | solaris            | __sun                     |
   | freebsd            | __FreeBSD__               |
+  | netbsd             | __NetBSD__                |
   | openbsd            | __OpenBSD__               |
   | linux (not andorid)| __linux__ && !__ANDROID__ |
   | android            | __ANDROID__               |
@@ -68,6 +73,8 @@
   |            | _ARCH_PPC         |
   | ppc64      | __PPC64__         |
   |            | _ARCH_PPC64       |
+  | s390       | __s390__          |
+  | s390x      | __s390x__         |
 
   These are the list which is not implemented yet.
 
@@ -90,6 +97,11 @@
 # define OPENSSL_LINUX 1
 #endif
 
+#undef OPENSSL_BSD
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+# define OPENSSL_BSD 1
+#endif
+
 #if defined(OPENSSL_LINUX) && defined(__i386__)
 # include "./archs/linux-elf/opensslconf.h"
 #elif defined(OPENSSL_LINUX) && defined(__ILP32__)
@@ -108,9 +120,9 @@
 # include "./archs/VC-WIN32/opensslconf.h"
 #elif defined(_WIN32) && defined(_M_X64)
 # include "./archs/VC-WIN64A/opensslconf.h"
-#elif (defined(__FreeBSD__) || defined(__OpenBSD__)) && defined(__i386__)
+#elif defined(OPENSSL_BSD) && defined(__i386__)
 # include "./archs/BSD-x86/opensslconf.h"
-#elif (defined(__FreeBSD__) || defined(__OpenBSD__)) && defined(__x86_64__)
+#elif defined(OPENSSL_BSD) && defined(__x86_64__)
 # include "./archs/BSD-x86_64/opensslconf.h"
 #elif defined(__sun) && defined(__i386__)
 # include "./archs/solaris-x86-gcc/opensslconf.h"
@@ -124,6 +136,10 @@
 # include "./archs/aix64-gcc/opensslconf.h"
 #elif defined(_AIX) && !defined(_ARCH_PPC64) && defined(_ARCH_PPC)
 # include "./archs/aix-gcc/opensslconf.h"
+#elif defined(OPENSSL_LINUX) && defined(__s390x__)
+# include "./archs/linux64-s390x/opensslconf.h"
+#elif defined(OPENSSL_LINUX) && defined(__s390__)
+# include "./archs/linux32-s390x/opensslconf.h"
 #else
 # include "./archs/linux-elf/opensslconf.h"
 #endif

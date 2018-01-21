@@ -7,6 +7,7 @@
 
 #include "src/handles.h"
 #include "src/objects.h"
+#include "src/objects/map.h"
 
 namespace v8 {
 namespace internal {
@@ -28,9 +29,14 @@ class CompilationDependencies {
   void AssumeInitialMapCantChange(Handle<Map> map) {
     Insert(DependentCode::kInitialMapChangedGroup, map);
   }
-  void AssumeFieldType(Handle<Map> map) {
-    Insert(DependentCode::kFieldTypeGroup, map);
+  void AssumeFieldOwner(Handle<Map> map) {
+    Insert(DependentCode::kFieldOwnerGroup, map);
   }
+  void AssumeMapStable(Handle<Map> map);
+  void AssumePrototypeMapsStable(
+      Handle<Map> map,
+      MaybeHandle<JSReceiver> prototype = MaybeHandle<JSReceiver>());
+  void AssumeMapNotDeprecated(Handle<Map> map);
   void AssumePropertyCell(Handle<PropertyCell> cell) {
     Insert(DependentCode::kPropertyCellChangedGroup, cell);
   }
@@ -58,10 +64,10 @@ class CompilationDependencies {
   bool aborted_;
   ZoneList<Handle<HeapObject> >* groups_[DependentCode::kGroupCount];
 
-  DependentCode* Get(Handle<Object> object);
+  DependentCode* Get(Handle<Object> object) const;
   void Set(Handle<Object> object, Handle<DependentCode> dep);
 };
-}
-}  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_DEPENDENCIES_H_

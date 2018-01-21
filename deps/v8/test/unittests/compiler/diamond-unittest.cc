@@ -114,7 +114,8 @@ TEST_F(DiamondTest, DiamondPhis) {
   Node* p2 = Parameter(2);
   Diamond d(graph(), common(), p0);
 
-  MachineType types[] = {kMachAnyTagged, kMachUint32, kMachInt32};
+  MachineRepresentation types[] = {MachineRepresentation::kTagged,
+                                   MachineRepresentation::kWord32};
 
   for (size_t i = 0; i < arraysize(types); i++) {
     Node* phi = d.Phi(types[i], p1, p2);
@@ -130,13 +131,13 @@ TEST_F(DiamondTest, DiamondPhis) {
 
 TEST_F(DiamondTest, BranchHint) {
   Diamond dn(graph(), common(), Parameter(0));
-  CHECK(BranchHint::kNone == BranchHintOf(dn.branch->op()));
+  CHECK_EQ(BranchHint::kNone, BranchHintOf(dn.branch->op()));
 
   Diamond dt(graph(), common(), Parameter(0), BranchHint::kTrue);
-  CHECK(BranchHint::kTrue == BranchHintOf(dt.branch->op()));
+  CHECK_EQ(BranchHint::kTrue, BranchHintOf(dt.branch->op()));
 
   Diamond df(graph(), common(), Parameter(0), BranchHint::kFalse);
-  CHECK(BranchHint::kFalse == BranchHintOf(df.branch->op()));
+  CHECK_EQ(BranchHint::kFalse, BranchHintOf(df.branch->op()));
 }
 
 

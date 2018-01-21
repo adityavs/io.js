@@ -34,11 +34,14 @@
 #include "src/factory.h"
 #include "src/macro-assembler.h"
 #include "src/mips64/constants-mips64.h"
+#include "src/objects-inl.h"
+#include "src/register-configuration.h"
 #include "src/simulator.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/test-code-stubs.h"
 
-using namespace v8::internal;
+namespace v8 {
+namespace internal {
 
 #define __ masm.
 
@@ -52,7 +55,8 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
       Assembler::kMinimalBufferSize, &actual_size, true));
   CHECK(buffer);
   HandleScope handles(isolate);
-  MacroAssembler masm(isolate, buffer, static_cast<int>(actual_size));
+  MacroAssembler masm(isolate, buffer, static_cast<int>(actual_size),
+                      v8::internal::CodeObjectRequired::kYes);
   DoubleToIStub stub(isolate, source_reg, destination_reg, 0, true,
                      inline_fastpath);
 
@@ -73,15 +77,16 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   }
   // Push the double argument.
   __ Dsubu(sp, sp, Operand(kDoubleSize));
-  __ sdc1(f12, MemOperand(sp));
+  __ Sdc1(f12, MemOperand(sp));
   __ Move(source_reg, sp);
 
   // Save registers make sure they don't get clobbered.
   int source_reg_offset = kDoubleSize;
   int reg_num = 2;
-  for (; reg_num < Register::NumAllocatableRegisters(); ++reg_num) {
+  const RegisterConfiguration* config = RegisterConfiguration::Default();
+  for (; reg_num < config->num_allocatable_general_registers(); ++reg_num) {
     Register reg = Register::from_code(reg_num);
-    if (!reg.is(destination_reg)) {
+    if (reg != destination_reg) {
       __ push(reg);
       source_reg_offset += kPointerSize;
     }
@@ -89,13 +94,13 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   // Re-push the double argument.
   __ Dsubu(sp, sp, Operand(kDoubleSize));
-  __ sdc1(f12, MemOperand(sp));
+  __ Sdc1(f12, MemOperand(sp));
 
   // Call through to the actual stub
   if (inline_fastpath) {
-    __ ldc1(f12, MemOperand(source_reg));
+    __ Ldc1(f12, MemOperand(source_reg));
     __ TryInlineTruncateDoubleToI(destination_reg, f12, &done);
-    if (destination_reg.is(source_reg) && !source_reg.is(sp)) {
+    if (destination_reg == source_reg && source_reg != sp) {
       // Restore clobbered source_reg.
       __ Daddu(source_reg, sp, Operand(source_reg_offset));
     }
@@ -108,8 +113,8 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   // Make sure no registers have been unexpectedly clobbered
   for (--reg_num; reg_num >= 2; --reg_num) {
     Register reg = Register::from_code(reg_num);
-    if (!reg.is(destination_reg)) {
-      __ ld(at, MemOperand(sp, 0));
+    if (reg != destination_reg) {
+      __ Ld(at, MemOperand(sp, 0));
       __ Assert(eq, kRegisterWasClobbered, reg, Operand(at));
       __ Daddu(sp, sp, Operand(kPointerSize));
     }
@@ -134,8 +139,8 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   __ Ret();
 
   CodeDesc desc;
-  masm.GetCode(&desc);
-  CpuFeatures::FlushICache(buffer, actual_size);
+  masm.GetCode(isolate, &desc);
+  Assembler::FlushICache(isolate, buffer, actual_size);
   return (reinterpret_cast<ConvertDToIFunc>(
       reinterpret_cast<intptr_t>(buffer)));
 }
@@ -151,9 +156,10 @@ static Isolate* GetIsolateFrom(LocalContext* context) {
 int32_t RunGeneratedCodeCallWrapper(ConvertDToIFunc func,
                                     double from) {
 #ifdef USE_SIMULATOR
-  Simulator::current(Isolate::Current())->CallFP(FUNCTION_ADDR(func), from, 0.);
+  Simulator::current(CcTest::i_isolate())
+      ->CallFP(FUNCTION_ADDR(func), from, 0.);
   return static_cast<int32_t>(
-      Simulator::current(Isolate::Current())->get_register(v0.code()));
+      Simulator::current(CcTest::i_isolate())->get_register(v0.code()));
 #else
   return (*func)(from);
 #endif
@@ -195,3 +201,6 @@ TEST(ConvertDToI) {
     }
   }
 }
+
+}  // namespace internal
+}  // namespace v8

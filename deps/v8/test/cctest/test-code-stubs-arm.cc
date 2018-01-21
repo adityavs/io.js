@@ -27,17 +27,19 @@
 
 #include <stdlib.h>
 
-#include "src/v8.h"
-
+#include "src/assembler-inl.h"
 #include "src/base/platform/platform.h"
 #include "src/code-stubs.h"
 #include "src/factory.h"
 #include "src/macro-assembler.h"
+#include "src/objects-inl.h"
 #include "src/simulator.h"
+#include "src/v8.h"
 #include "test/cctest/cctest.h"
 #include "test/cctest/test-code-stubs.h"
 
-using namespace v8::internal;
+namespace v8 {
+namespace internal {
 
 #define __ masm.
 
@@ -51,7 +53,8 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
       Assembler::kMinimalBufferSize, &actual_size, true));
   CHECK(buffer);
   HandleScope handles(isolate);
-  MacroAssembler masm(isolate, buffer, static_cast<int>(actual_size));
+  MacroAssembler masm(isolate, buffer, static_cast<int>(actual_size),
+                      v8::internal::CodeObjectRequired::kYes);
   DoubleToIStub stub(isolate, source_reg, destination_reg, 0, true,
                      inline_fastpath);
 
@@ -69,18 +72,20 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   // Push the double argument.
   __ sub(sp, sp, Operand(kDoubleSize));
   __ vstr(d0, sp, 0);
-  if (!source_reg.is(sp)) {
+  if (source_reg != sp) {
     __ mov(source_reg, sp);
   }
 
   // Save registers make sure they don't get clobbered.
   int source_reg_offset = kDoubleSize;
   int reg_num = 0;
-  for (; reg_num < Register::NumAllocatableRegisters(); ++reg_num) {
-    Register reg = Register::from_code(reg_num);
-    if (!reg.is(destination_reg)) {
-      __ push(reg);
-      source_reg_offset += kPointerSize;
+  for (; reg_num < Register::kNumRegisters; ++reg_num) {
+    if (RegisterConfiguration::Default()->IsAllocatableGeneralCode(reg_num)) {
+      Register reg = Register::from_code(reg_num);
+      if (reg != destination_reg) {
+        __ push(reg);
+        source_reg_offset += kPointerSize;
+      }
     }
   }
 
@@ -92,7 +97,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   if (inline_fastpath) {
     __ vldr(d0, MemOperand(source_reg));
     __ TryInlineTruncateDoubleToI(destination_reg, d0, &done);
-    if (destination_reg.is(source_reg) && !source_reg.is(sp)) {
+    if (destination_reg == source_reg && source_reg != sp) {
       // Restore clobbered source_reg.
       __ add(source_reg, sp, Operand(source_reg_offset));
     }
@@ -104,19 +109,20 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
 
   // Make sure no registers have been unexpectedly clobbered
   for (--reg_num; reg_num >= 0; --reg_num) {
-    Register reg = Register::from_code(reg_num);
-    if (!reg.is(destination_reg)) {
-      __ ldr(ip, MemOperand(sp, 0));
-      __ cmp(reg, ip);
-      __ Assert(eq, kRegisterWasClobbered);
-      __ add(sp, sp, Operand(kPointerSize));
+    if (RegisterConfiguration::Default()->IsAllocatableGeneralCode(reg_num)) {
+      Register reg = Register::from_code(reg_num);
+      if (reg != destination_reg) {
+        __ ldr(ip, MemOperand(sp, 0));
+        __ cmp(reg, ip);
+        __ Assert(eq, kRegisterWasClobbered);
+        __ add(sp, sp, Operand(kPointerSize));
+      }
     }
   }
 
   __ add(sp, sp, Operand(kDoubleSize));
 
-  if (!destination_reg.is(r0))
-    __ mov(r0, destination_reg);
+  if (destination_reg != r0) __ mov(r0, destination_reg);
 
   // Restore callee save registers.
   __ Pop(lr);
@@ -125,7 +131,7 @@ ConvertDToIFunc MakeConvertDToIFuncTrampoline(Isolate* isolate,
   __ Ret(0);
 
   CodeDesc desc;
-  masm.GetCode(&desc);
+  masm.GetCode(isolate, &desc);
   Assembler::FlushICache(isolate, buffer, actual_size);
   return (reinterpret_cast<ConvertDToIFunc>(
       reinterpret_cast<intptr_t>(buffer)));
@@ -142,7 +148,7 @@ static Isolate* GetIsolateFrom(LocalContext* context) {
 int32_t RunGeneratedCodeCallWrapper(ConvertDToIFunc func,
                                     double from) {
 #ifdef USE_SIMULATOR
-  return CALL_GENERATED_FP_INT(func, from, 0);
+  return CALL_GENERATED_FP_INT(CcTest::i_isolate(), func, from, 0);
 #else
   return (*func)(from);
 #endif
@@ -182,3 +188,6 @@ TEST(ConvertDToI) {
     }
   }
 }
+
+}  // namespace internal
+}  // namespace v8

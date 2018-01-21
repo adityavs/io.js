@@ -6,13 +6,13 @@
 #define V8_CODEGEN_H_
 
 #include "src/code-stubs.h"
+#include "src/globals.h"
 #include "src/runtime/runtime.h"
 
 // Include the declaration of the architecture defined class CodeGenerator.
-// The contract  to the shared code is that the the CodeGenerator is a subclass
+// The contract to the shared code is that the the CodeGenerator is a subclass
 // of Visitor and that the following methods are available publicly:
 //   MakeCode
-//   MakeCodePrologue
 //   MakeCodeEpilogue
 //   masm
 //   frame
@@ -56,8 +56,8 @@
 #include "src/mips/codegen-mips.h"  // NOLINT
 #elif V8_TARGET_ARCH_MIPS64
 #include "src/mips64/codegen-mips64.h"  // NOLINT
-#elif V8_TARGET_ARCH_X87
-#include "src/x87/codegen-x87.h"  // NOLINT
+#elif V8_TARGET_ARCH_S390
+#include "src/s390/codegen-s390.h"  // NOLINT
 #else
 #error Unsupported target architecture.
 #endif
@@ -65,18 +65,16 @@
 namespace v8 {
 namespace internal {
 
-
 class CompilationInfo;
-
+class EhFrameWriter;
 
 class CodeGenerator {
  public:
-  // Printing of AST, etc. as requested by flags.
-  static void MakeCodePrologue(CompilationInfo* info, const char* kind);
-
   // Allocate and install the code.
-  static Handle<Code> MakeCodeEpilogue(MacroAssembler* masm,
-                                       CompilationInfo* info);
+  static Handle<Code> MakeCodeEpilogue(TurboAssembler* tasm,
+                                       EhFrameWriter* unwinding,
+                                       CompilationInfo* info,
+                                       Handle<Object> self_reference);
 
   // Print the code after compiling it.
   static void PrintCode(Handle<Code> code, CompilationInfo* info);
@@ -85,91 +83,20 @@ class CodeGenerator {
   DISALLOW_COPY_AND_ASSIGN(CodeGenerator);
 };
 
-
 // Results of the library implementation of transcendental functions may differ
 // from the one we use in our generated code.  Therefore we use the same
 // generated code both in runtime and compiled code.
-typedef double (*UnaryMathFunction)(double x);
+typedef double (*UnaryMathFunctionWithIsolate)(double x, Isolate* isolate);
 
-UnaryMathFunction CreateExpFunction();
-UnaryMathFunction CreateSqrtFunction();
+UnaryMathFunctionWithIsolate CreateSqrtFunction(Isolate* isolate);
 
-
-double modulo(double x, double y);
+V8_EXPORT_PRIVATE double modulo(double x, double y);
 
 // Custom implementation of math functions.
-double fast_exp(double input);
-double fast_sqrt(double input);
-#ifdef _WIN64
-void init_modulo_function();
-#endif
-void lazily_initialize_fast_exp();
-void init_fast_sqrt_function();
+double fast_sqrt(double input, Isolate* isolate);
+void lazily_initialize_fast_sqrt(Isolate* isolate);
 
-
-class ElementsTransitionGenerator : public AllStatic {
- public:
-  // If |mode| is set to DONT_TRACK_ALLOCATION_SITE,
-  // |allocation_memento_found| may be NULL.
-  static void GenerateMapChangeElementsTransition(
-      MacroAssembler* masm,
-      Register receiver,
-      Register key,
-      Register value,
-      Register target_map,
-      AllocationSiteMode mode,
-      Label* allocation_memento_found);
-  static void GenerateSmiToDouble(
-      MacroAssembler* masm,
-      Register receiver,
-      Register key,
-      Register value,
-      Register target_map,
-      AllocationSiteMode mode,
-      Label* fail);
-  static void GenerateDoubleToObject(
-      MacroAssembler* masm,
-      Register receiver,
-      Register key,
-      Register value,
-      Register target_map,
-      AllocationSiteMode mode,
-      Label* fail);
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ElementsTransitionGenerator);
-};
-
-static const int kNumberDictionaryProbes = 4;
-
-
-class CodeAgingHelper {
- public:
-  CodeAgingHelper();
-
-  uint32_t young_sequence_length() const { return young_sequence_.length(); }
-  bool IsYoung(byte* candidate) const {
-    return memcmp(candidate,
-                  young_sequence_.start(),
-                  young_sequence_.length()) == 0;
-  }
-  void CopyYoungSequenceTo(byte* new_buffer) const {
-    CopyBytes(new_buffer, young_sequence_.start(), young_sequence_.length());
-  }
-
-#ifdef DEBUG
-  bool IsOld(byte* candidate) const;
-#endif
-
- protected:
-  const EmbeddedVector<byte, kNoCodeAgeSequenceLength> young_sequence_;
-#ifdef DEBUG
-#ifdef V8_TARGET_ARCH_ARM64
-  const EmbeddedVector<byte, kNoCodeAgeSequenceLength> old_sequence_;
-#endif
-#endif
-};
-
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_CODEGEN_H_

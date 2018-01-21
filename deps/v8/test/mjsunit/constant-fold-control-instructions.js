@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --allow-natives-syntax --fold-constants
+// Flags: --allow-natives-syntax
 
 function test() {
   assertEquals("string", typeof "");
@@ -18,21 +18,11 @@ function test() {
   assertFalse(%_IsSmi(1.1));
   assertFalse(%_IsSmi({}));
 
-  assertTrue(%_IsRegExp(/regexp/));
-  assertFalse(%_IsRegExp({}));
-
   assertTrue(%_IsArray([1]));
   assertFalse(%_IsArray(function() {}));
 
-  assertTrue(%_IsFunction(function() {}));
-  assertFalse(%_IsFunction(null));
-
-  assertTrue(%_IsSpecObject(new Date()));
-  assertFalse(%_IsSpecObject(1));
-
-  assertTrue(%_IsMinusZero(-0.0));
-  assertFalse(%_IsMinusZero(1));
-  assertFalse(%_IsMinusZero(""));
+  assertTrue(%_IsJSReceiver(new Date()));
+  assertFalse(%_IsJSReceiver(1));
 }
 
 

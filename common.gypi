@@ -11,11 +11,23 @@
     'msvs_multi_core_compile': '0',   # we do enable multicore compiles, but not using the V8 way
     'python%': 'python',
 
+    'node_shared%': 'false',
+    'force_dynamic_crt%': 0,
+    'node_use_v8_platform%': 'true',
+    'node_use_bundled_v8%': 'true',
+    'node_module_version%': '',
+
     'node_tag%': '',
     'uv_library%': 'static_library',
 
+    'openssl_fips%': '',
+
     # Default to -O0 for debug builds.
     'v8_optimized_debug%': 0,
+
+    # Reset this number to 0 on major V8 upgrades.
+    # Increment by one for each non-official patch applied to deps/v8.
+    'v8_embedder_string': '-node.6',
 
     # Enable disassembler for `--print-code` v8 options
     'v8_enable_disassembler': 1,
@@ -23,25 +35,38 @@
     # Don't bake anything extra into the snapshot.
     'v8_use_external_startup_data%': 0,
 
+    # Some STL containers (e.g. std::vector) do not preserve ABI compatibility
+    # between debug and non-debug mode.
+    'disable_glibcxx_debug': 1,
+
+    # Don't use ICU data file (icudtl.dat) from V8, we use our own.
+    'icu_use_data_file_flag%': 0,
+
     'conditions': [
+      ['GENERATOR=="ninja"', {
+        'OBJ_DIR': '<(PRODUCT_DIR)/obj',
+        'V8_BASE': '<(PRODUCT_DIR)/obj/deps/v8/src/libv8_base.a',
+       }, {
+         'OBJ_DIR%': '<(PRODUCT_DIR)/obj.target',
+         'V8_BASE%': '<(PRODUCT_DIR)/obj.target/deps/v8/src/libv8_base.a',
+      }],
       ['OS == "win"', {
         'os_posix': 0,
         'v8_postmortem_support%': 'false',
+        'OBJ_DIR': '<(PRODUCT_DIR)/obj',
+        'V8_BASE': '<(PRODUCT_DIR)/lib/v8_libbase.lib',
       }, {
         'os_posix': 1,
         'v8_postmortem_support%': 'true',
       }],
-      ['GENERATOR == "ninja" or OS== "mac"', {
-        'OBJ_DIR': '<(PRODUCT_DIR)/obj',
+      ['OS== "mac"', {
+        'OBJ_DIR%': '<(PRODUCT_DIR)/obj.target',
         'V8_BASE': '<(PRODUCT_DIR)/libv8_base.a',
-      }, {
-        'OBJ_DIR': '<(PRODUCT_DIR)/obj.target',
-        'V8_BASE': '<(PRODUCT_DIR)/obj.target/deps/v8/tools/gyp/libv8_base.a',
       }],
       ['openssl_fips != ""', {
-        'OPENSSL_PRODUCT': 'libcrypto.a',
+        'OPENSSL_PRODUCT': '<(STATIC_LIB_PREFIX)crypto<(STATIC_LIB_SUFFIX)',
       }, {
-        'OPENSSL_PRODUCT': 'libopenssl.a',
+        'OPENSSL_PRODUCT': '<(STATIC_LIB_PREFIX)openssl<(STATIC_LIB_SUFFIX)',
       }],
       ['OS=="mac"', {
         'clang%': 1,
@@ -58,7 +83,7 @@
         'variables': {
           'v8_enable_handle_zapping': 1,
         },
-        'defines': [ 'DEBUG', '_DEBUG' ],
+        'defines': [ 'DEBUG', '_DEBUG', 'V8_ENABLE_CHECKS' ],
         'cflags': [ '-g', '-O0' ],
         'conditions': [
           ['target_arch=="x64"', {
@@ -68,14 +93,35 @@
             'cflags': [ '-gxcoff' ],
             'ldflags': [ '-Wl,-bbigtoc' ],
           }],
+          ['OS == "android"', {
+            'cflags': [ '-fPIE' ],
+            'ldflags': [ '-fPIE', '-pie' ]
+          }],
+          ['node_shared=="true"', {
+            'msvs_settings': {
+             'VCCLCompilerTool': {
+               'RuntimeLibrary': 3, # MultiThreadedDebugDLL (/MDd)
+             }
+            }
+          }],
+          ['node_shared=="false"', {
+            'msvs_settings': {
+              'VCCLCompilerTool': {
+                'RuntimeLibrary': 1 # MultiThreadedDebug (/MTd)
+              }
+            }
+          }]
         ],
         'msvs_settings': {
           'VCCLCompilerTool': {
-            'RuntimeLibrary': 1, # static debug
             'Optimization': 0, # /Od, no optimization
             'MinimalRebuild': 'false',
             'OmitFramePointers': 'false',
             'BasicRuntimeChecks': 3, # /RTC1
+            'AdditionalOptions': [
+              '/bigobj', # prevent error C1128 in VS2015
+              '/MP', # compile across multiple CPUs
+            ],
           },
           'VCLinkerTool': {
             'LinkIncremental': 2, # enable incremental linking
@@ -89,7 +135,7 @@
         'variables': {
           'v8_enable_handle_zapping': 0,
         },
-        'cflags': [ '-O3', '-ffunction-sections', '-fdata-sections' ],
+        'cflags': [ '-O3' ],
         'conditions': [
           ['target_arch=="x64"', {
             'msvs_configuration_platform': 'x64',
@@ -101,12 +147,29 @@
           ['OS!="mac" and OS!="win"', {
             'cflags': [ '-fno-omit-frame-pointer' ],
           }],
+          ['OS == "android"', {
+            'cflags': [ '-fPIE' ],
+            'ldflags': [ '-fPIE', '-pie' ]
+          }],
+          ['node_shared=="true"', {
+            'msvs_settings': {
+             'VCCLCompilerTool': {
+               'RuntimeLibrary': 2 # MultiThreadedDLL (/MD)
+             }
+            }
+          }],
+          ['node_shared=="false"', {
+            'msvs_settings': {
+              'VCCLCompilerTool': {
+                'RuntimeLibrary': 0 # MultiThreaded (/MT)
+              }
+            }
+          }]
         ],
         'msvs_settings': {
           'VCCLCompilerTool': {
-            'RuntimeLibrary': 0, # static release
             'Optimization': 3, # /Ox, full optimization
-            'FavorSizeOrSpeed': 1, # /Ot, favour speed over size
+            'FavorSizeOrSpeed': 1, # /Ot, favor speed over size
             'InlineFunctionExpansion': 2, # /Ob2, inline anything eligible
             'WholeProgramOptimization': 'true', # /GL, whole program optimization, needed for LTCG
             'OmitFramePointers': 'true',
@@ -123,10 +186,12 @@
             ],
           },
           'VCLinkerTool': {
-            'LinkTimeCodeGeneration': 1, # link-time code generation
             'OptimizeReferences': 2, # /OPT:REF
             'EnableCOMDATFolding': 2, # /OPT:ICF
             'LinkIncremental': 1, # disable incremental linking
+            'AdditionalOptions': [
+              '/LTCG:INCREMENTAL', # incremental link-time code generation
+            ],
           },
         },
       }
@@ -143,9 +208,11 @@
         'BufferSecurityCheck': 'true',
         'ExceptionHandling': 0, # /EHsc
         'SuppressStartupBanner': 'true',
+        # Disable "warning C4267: conversion from 'size_t' to 'int',
+        # possible loss of data".  Many originate from our dependencies
+        # and their sheer number drowns out other, more legitimate warnings.
+        'DisableSpecificWarnings': ['4267'],
         'WarnAsError': 'false',
-      },
-      'VCLibrarianTool': {
       },
       'VCLinkerTool': {
         'conditions': [
@@ -224,13 +291,17 @@
         'cflags': [ '-pthread', ],
         'ldflags': [ '-pthread' ],
       }],
-      [ 'OS in "linux freebsd openbsd solaris android aix"', {
+      [ 'OS in "linux freebsd openbsd solaris android aix cloudabi"', {
         'cflags': [ '-Wall', '-Wextra', '-Wno-unused-parameter', ],
         'cflags_cc': [ '-fno-rtti', '-fno-exceptions', '-std=gnu++0x' ],
         'ldflags': [ '-rdynamic' ],
         'target_conditions': [
-          ['_type=="static_library"', {
-            'standalone_static_library': 1, # disable thin archive which needs binutils >= 2.19
+          # The 1990s toolchain on SmartOS can't handle thin archives.
+          ['_type=="static_library" and OS=="solaris"', {
+            'standalone_static_library': 1,
+          }],
+          ['OS=="openbsd"', {
+            'ldflags': [ '-Wl,-z,wxneeded' ],
           }],
         ],
         'conditions': [
@@ -254,6 +325,14 @@
 	    'cflags': [ '-m64', '-mminimal-toc' ],
 	    'ldflags': [ '-m64' ],
 	   }],
+          [ 'target_arch=="s390"', {
+            'cflags': [ '-m31', '-march=z196' ],
+            'ldflags': [ '-m31', '-march=z196' ],
+          }],
+          [ 'target_arch=="s390x"', {
+            'cflags': [ '-m64', '-march=z196' ],
+            'ldflags': [ '-m64', '-march=z196' ],
+          }],
           [ 'OS=="solaris"', {
             'cflags': [ '-pthreads' ],
             'ldflags': [ '-pthreads' ],
@@ -270,13 +349,21 @@
                 'ldflags': [ '-maix64' ],
               }],
             ],
+            'ldflags': [ '-Wl,-bbigtoc' ],
             'ldflags!': [ '-rdynamic' ],
+          }],
+          [ 'node_shared=="true"', {
+            'cflags': [ '-fPIC' ],
           }],
         ],
       }],
-      [ 'OS=="android"', {
-        'defines': ['_GLIBCXX_USE_C99_MATH'],
-        'libraries': [ '-llog' ],
+      ['OS=="android"', {
+        'target_conditions': [
+          ['_toolset=="target"', {
+            'defines': [ '_GLIBCXX_USE_C99_MATH' ],
+            'libraries': [ '-llog' ],
+          }],
+        ],
       }],
       ['OS=="mac"', {
         'defines': ['_DARWIN_USE_64_BIT_INODE=1'],
@@ -290,7 +377,7 @@
           'GCC_ENABLE_PASCAL_STRINGS': 'NO',        # No -mpascal-strings
           'GCC_THREADSAFE_STATICS': 'NO',           # -fno-threadsafe-statics
           'PREBINDING': 'NO',                       # No -Wl,-prebind
-          'MACOSX_DEPLOYMENT_TARGET': '10.5',       # -mmacosx-version-min=10.5
+          'MACOSX_DEPLOYMENT_TARGET': '10.7',       # -mmacosx-version-min=10.7
           'USE_HEADERMAP': 'NO',
           'OTHER_CFLAGS': [
             '-fno-strict-aliasing',
@@ -304,7 +391,12 @@
         },
         'target_conditions': [
           ['_type!="static_library"', {
-            'xcode_settings': {'OTHER_LDFLAGS': ['-Wl,-search_paths_first']},
+            'xcode_settings': {
+              'OTHER_LDFLAGS': [
+                '-Wl,-no_pie',
+                '-Wl,-search_paths_first',
+              ],
+            },
           }],
         ],
         'conditions': [
@@ -318,6 +410,7 @@
             'xcode_settings': {
               'GCC_VERSION': 'com.apple.compilers.llvm.clang.1_0',
               'CLANG_CXX_LANGUAGE_STANDARD': 'gnu++0x',  # -std=gnu++0x
+              'CLANG_CXX_LIBRARY': 'libc++',
             },
           }],
         ],
@@ -326,6 +419,15 @@
         'libraries': [ '-lelf' ],
       }],
       ['OS=="freebsd"', {
+        'conditions': [
+          ['"0" < llvm_version < "4.0"', {
+            # Use this flag because on FreeBSD std::pairs copy constructor is non-trivial.
+            # Doesn't apply to llvm 4.0 (FreeBSD 11.1) or later.
+            # Refs: https://lists.freebsd.org/pipermail/freebsd-toolchain/2016-March/002094.html
+            # Refs: https://svnweb.freebsd.org/ports/head/www/node/Makefile?revision=444555&view=markup
+            'cflags': [ '-D_LIBCPP_TRIVIAL_PAIR_COPY_CTOR=1' ],
+          }],
+        ],
         'ldflags': [
           '-Wl,--export-dynamic',
         ],

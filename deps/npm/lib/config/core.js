@@ -10,6 +10,7 @@ var ini = require('ini')
 var Umask = configDefs.Umask
 var mkdirp = require('mkdirp')
 var umask = require('../utils/umask')
+var isWindows = require('../utils/is-windows.js')
 
 exports.load = load
 exports.Conf = Conf
@@ -207,7 +208,7 @@ inherits(Conf, CC)
 function Conf (base) {
   if (!(this instanceof Conf)) return new Conf(base)
 
-  CC.apply(this)
+  CC.call(this)
 
   if (base) {
     if (base instanceof Conf) {
@@ -224,7 +225,6 @@ Conf.prototype.loadPrefix = require('./load-prefix.js')
 Conf.prototype.loadCAFile = require('./load-cafile.js')
 Conf.prototype.loadUid = require('./load-uid.js')
 Conf.prototype.setUser = require('./set-user.js')
-Conf.prototype.findPrefix = require('./find-prefix.js')
 Conf.prototype.getCredentialsByURI = require('./get-credentials-by-uri.js')
 Conf.prototype.setCredentialsByURI = require('./set-credentials-by-uri.js')
 Conf.prototype.clearCredentialsByURI = require('./clear-credentials-by-uri.js')
@@ -391,7 +391,7 @@ function parseField (f, k) {
   f = envReplace(f)
 
   if (isPath) {
-    var homePattern = process.platform === 'win32' ? /^~(\/|\\)/ : /^~\//
+    var homePattern = isWindows ? /^~(\/|\\)/ : /^~\//
     if (f.match(homePattern) && process.env.HOME) {
       f = path.resolve(process.env.HOME, f.substr(2))
     }

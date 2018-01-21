@@ -56,14 +56,14 @@ test('npm login', function (t) {
       [
         'login',
         '--registry', common.registry,
-        '--loglevel', 'silent',
+        '--loglevel', 'error',
         '--userconfig', outfile
       ],
       opts,
       function (err, code, stdout, stderr) {
-        t.ifError(err, 'npm ran without issue')
-        t.notOk(code, 'exited OK')
-        t.notOk(stderr, 'no error output')
+        if (err) throw err
+        t.is(code, 0, 'exited OK')
+        t.is(stderr, '', 'no error output')
         var config = fs.readFileSync(outfile, 'utf8')
         t.like(config, /:always-auth=false/, 'always-auth is scoped and false (by default)')
         s.close()
@@ -74,19 +74,20 @@ test('npm login', function (t) {
       }
     )
 
-    var o = ''
-    var e = ''
     var remaining = Object.keys(responses).length
     runner.stdout.on('data', function (chunk) {
-      remaining--
-      o += chunk
+      if (remaining > 0) {
+        remaining--
 
-      var label = chunk.toString('utf8').split(':')[0]
-      runner.stdin.write(responses[label])
+        var label = chunk.toString('utf8').split(':')[0]
+        if (responses[label]) runner.stdin.write(responses[label])
 
-      if (remaining === 0) runner.stdin.end()
+        if (remaining === 0) runner.stdin.end()
+      } else {
+        var message = chunk.toString('utf8').trim()
+        t.equal(message, 'Logged in as u on ' + common.registry + '/.')
+      }
     })
-    runner.stderr.on('data', function (chunk) { e += chunk })
   })
 })
 

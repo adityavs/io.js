@@ -1,5 +1,28 @@
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 #ifndef SRC_STREAM_WRAP_H_
 #define SRC_STREAM_WRAP_H_
+
+#if defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #include "stream_base.h"
 
@@ -10,17 +33,13 @@
 
 namespace node {
 
-// Forward declaration
-class StreamWrap;
-
-class StreamWrap : public HandleWrap, public StreamBase {
+class LibuvStreamWrap : public HandleWrap, public StreamBase {
  public:
   static void Initialize(v8::Local<v8::Object> target,
                          v8::Local<v8::Value> unused,
                          v8::Local<v8::Context> context);
 
   int GetFD() override;
-  void* Cast() override;
   bool IsAlive() override;
   bool IsClosing() override;
   bool IsIPCPipe() override;
@@ -55,23 +74,23 @@ class StreamWrap : public HandleWrap, public StreamBase {
   }
 
  protected:
-  StreamWrap(Environment* env,
-             v8::Local<v8::Object> object,
-             uv_stream_t* stream,
-             AsyncWrap::ProviderType provider,
-             AsyncWrap* parent = nullptr);
+  LibuvStreamWrap(Environment* env,
+                  v8::Local<v8::Object> object,
+                  uv_stream_t* stream,
+                  AsyncWrap::ProviderType provider);
 
-  ~StreamWrap() {
+  ~LibuvStreamWrap() {
   }
 
   AsyncWrap* GetAsyncWrap() override;
-  void UpdateWriteQueueSize();
 
   static void AddMethods(Environment* env,
                          v8::Local<v8::FunctionTemplate> target,
                          int flags = StreamBase::kFlagNone);
 
  private:
+  static void GetWriteQueueSize(
+      const v8::FunctionCallbackInfo<v8::Value>& info);
   static void SetBlocking(const v8::FunctionCallbackInfo<v8::Value>& args);
 
   // Callbacks for libuv
@@ -82,20 +101,17 @@ class StreamWrap : public HandleWrap, public StreamBase {
   static void OnRead(uv_stream_t* handle,
                      ssize_t nread,
                      const uv_buf_t* buf);
-  static void OnReadCommon(uv_stream_t* handle,
-                           ssize_t nread,
-                           const uv_buf_t* buf,
-                           uv_handle_type pending);
-  static void AfterWrite(uv_write_t* req, int status);
-  static void AfterShutdown(uv_shutdown_t* req, int status);
+  static void AfterUvWrite(uv_write_t* req, int status);
+  static void AfterUvShutdown(uv_shutdown_t* req, int status);
 
   // Resource interface implementation
-  static void OnAfterWriteImpl(WriteWrap* w, void* ctx);
   static void OnAllocImpl(size_t size, uv_buf_t* buf, void* ctx);
   static void OnReadImpl(ssize_t nread,
                          const uv_buf_t* buf,
                          uv_handle_type pending,
                          void* ctx);
+
+  void AfterWrite(WriteWrap* req_wrap, int status) override;
 
   uv_stream_t* const stream_;
 };
@@ -103,5 +119,6 @@ class StreamWrap : public HandleWrap, public StreamBase {
 
 }  // namespace node
 
+#endif  // defined(NODE_WANT_INTERNALS) && NODE_WANT_INTERNALS
 
 #endif  // SRC_STREAM_WRAP_H_

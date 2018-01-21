@@ -16,13 +16,18 @@ HeapEntry* HeapGraphEdge::from() const {
 }
 
 
+Isolate* HeapGraphEdge::isolate() const {
+  return snapshot()->profiler()->isolate();
+}
+
+
 HeapSnapshot* HeapGraphEdge::snapshot() const {
   return to_entry_->snapshot();
 }
 
 
 int HeapEntry::index() const {
-  return static_cast<int>(this - &snapshot_->entries().first());
+  return static_cast<int>(this - &snapshot_->entries().front());
 }
 
 
@@ -33,16 +38,23 @@ int HeapEntry::set_children_index(int index) {
   return next_index;
 }
 
-
-HeapGraphEdge** HeapEntry::children_arr() {
+std::deque<HeapGraphEdge*>::iterator HeapEntry::children_begin() {
   DCHECK(children_index_ >= 0);
-  SLOW_DCHECK(children_index_ < snapshot_->children().length() ||
-      (children_index_ == snapshot_->children().length() &&
+  SLOW_DCHECK(
+      children_index_ < static_cast<int>(snapshot_->children().size()) ||
+      (children_index_ == static_cast<int>(snapshot_->children().size()) &&
        children_count_ == 0));
-  return &snapshot_->children().first() + children_index_;
+  return snapshot_->children().begin() + children_index_;
+}
+
+std::deque<HeapGraphEdge*>::iterator HeapEntry::children_end() {
+  return children_begin() + children_count_;
 }
 
 
-} }  // namespace v8::internal
+Isolate* HeapEntry::isolate() const { return snapshot_->profiler()->isolate(); }
+
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_PROFILER_HEAP_SNAPSHOT_GENERATOR_INL_H_

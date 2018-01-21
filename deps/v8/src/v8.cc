@@ -4,7 +4,9 @@
 
 #include "src/v8.h"
 
+#include "src/api.h"
 #include "src/assembler.h"
+#include "src/base/atomicops.h"
 #include "src/base/once.h"
 #include "src/base/platform/platform.h"
 #include "src/bootstrapper.h"
@@ -12,17 +14,14 @@
 #include "src/deoptimizer.h"
 #include "src/elements.h"
 #include "src/frames.h"
-#include "src/hydrogen.h"
 #include "src/isolate.h"
-#include "src/lithium-allocator.h"
-#include "src/objects.h"
+#include "src/libsampler/sampler.h"
+#include "src/objects-inl.h"
 #include "src/profiler/heap-profiler.h"
-#include "src/profiler/sampler.h"
 #include "src/runtime-profiler.h"
 #include "src/snapshot/natives.h"
-#include "src/snapshot/serialize.h"
 #include "src/snapshot/snapshot.h"
-
+#include "src/tracing/tracing-category-observer.h"
 
 namespace v8 {
 namespace internal {
@@ -46,11 +45,9 @@ bool V8::Initialize() {
 void V8::TearDown() {
   Bootstrapper::TearDownExtensions();
   ElementsAccessor::TearDown();
-  LOperand::TearDownCaches();
-  ExternalReference::TearDownMathExpData();
   RegisteredExtension::UnregisterAll();
   Isolate::GlobalTearDown();
-  Sampler::TearDown();
+  sampler::Sampler::TearDown();
   FlagList::ResetAllFlags();  // Frees memory held by string arguments.
 }
 
@@ -69,26 +66,13 @@ void V8::InitializeOncePerProcessImpl() {
     FLAG_max_semi_space_size = 1;
   }
 
-  if (FLAG_turbo && strcmp(FLAG_turbo_filter, "~~") == 0) {
-    const char* filter_flag = "--turbo-filter=*";
-    FlagList::SetFlagsFromString(filter_flag, StrLength(filter_flag));
-  }
-
-  base::OS::Initialize(FLAG_random_seed, FLAG_hard_abort, FLAG_gc_fake_mmap);
+  base::OS::Initialize(FLAG_hard_abort, FLAG_gc_fake_mmap);
 
   Isolate::InitializeOncePerProcess();
 
-  Sampler::SetUp();
+  sampler::Sampler::SetUp();
   CpuFeatures::Probe(false);
-  init_memcopy_functions();
-  // The custom exp implementation needs 16KB of lookup data; initialize it
-  // on demand.
-  init_fast_sqrt_function();
-#ifdef _WIN64
-  init_modulo_function();
-#endif
   ElementsAccessor::InitializeOncePerProcess();
-  LOperand::SetUpCaches();
   SetUpJSCallerSavedCodeData();
   ExternalReference::SetUp();
   Bootstrapper::InitializeOncePerProcess();
@@ -104,23 +88,30 @@ void V8::InitializePlatform(v8::Platform* platform) {
   CHECK(!platform_);
   CHECK(platform);
   platform_ = platform;
+  v8::base::SetPrintStackTrace(platform_->GetStackTracePrinter());
+  v8::tracing::TracingCategoryObserver::SetUp();
 }
 
 
 void V8::ShutdownPlatform() {
   CHECK(platform_);
+  v8::tracing::TracingCategoryObserver::TearDown();
+  v8::base::SetPrintStackTrace(nullptr);
   platform_ = NULL;
 }
 
 
 v8::Platform* V8::GetCurrentPlatform() {
-  DCHECK(platform_);
-  return platform_;
+  v8::Platform* platform = reinterpret_cast<v8::Platform*>(
+      base::Relaxed_Load(reinterpret_cast<base::AtomicWord*>(&platform_)));
+  DCHECK(platform);
+  return platform;
 }
 
-
-void V8::SetPlatformForTesting(v8::Platform* platform) { platform_ = platform; }
-
+void V8::SetPlatformForTesting(v8::Platform* platform) {
+  base::Relaxed_Store(reinterpret_cast<base::AtomicWord*>(&platform_),
+                      reinterpret_cast<base::AtomicWord>(platform));
+}
 
 void V8::SetNativesBlob(StartupData* natives_blob) {
 #ifdef V8_USE_EXTERNAL_STARTUP_DATA
@@ -139,4 +130,9 @@ void V8::SetSnapshotBlob(StartupData* snapshot_blob) {
 #endif
 }
 }  // namespace internal
+
+// static
+double Platform::SystemClockTimeMillis() {
+  return base::OS::TimeCurrentMillis();
+}
 }  // namespace v8

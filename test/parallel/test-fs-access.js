@@ -1,25 +1,22 @@
 'use strict';
-var common = require('../common');
-var assert = require('assert');
-var fs = require('fs');
-var path = require('path');
-var doesNotExist = __filename + '__this_should_not_exist';
-var readOnlyFile = path.join(common.tmpDir, 'read_only_file');
-var readWriteFile = path.join(common.tmpDir, 'read_write_file');
 
-var removeFile = function(file) {
-  try {
-    fs.unlinkSync(file);
-  } catch (err) {
-    // Ignore error
-  }
-};
+// This tests that fs.access and fs.accessSync works as expected
+// and the errors thrown from these APIs include the desired properties
 
-var createFileWithPerms = function(file, mode) {
-  removeFile(file);
+const common = require('../common');
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const uv = process.binding('uv');
+
+const doesNotExist = path.join(common.tmpDir, '__this_should_not_exist');
+const readOnlyFile = path.join(common.tmpDir, 'read_only_file');
+const readWriteFile = path.join(common.tmpDir, 'read_write_file');
+
+function createFileWithPerms(file, mode) {
   fs.writeFileSync(file, '');
   fs.chmodSync(file, mode);
-};
+}
 
 common.refreshTmpDir();
 createFileWithPerms(readOnlyFile, 0o444);
@@ -37,18 +34,18 @@ createFileWithPerms(readWriteFile, 0o666);
  * The change of user id is done after creating the fixtures files for the same
  * reason: the test may be run as the superuser within a directory in which
  * only the superuser can create files, and thus it may need superuser
- * priviledges to create them.
+ * privileges to create them.
  *
  * There's not really any point in resetting the process' user id to 0 after
  * changing it to 'nobody', since in the case that the test runs without
- * superuser priviledge, it is not possible to change its process user id to
+ * superuser privilege, it is not possible to change its process user id to
  * superuser.
  *
  * It can prevent the test from removing files created before the change of user
- * id, but that's fine. In this case, it is the responsability of the
+ * id, but that's fine. In this case, it is the responsibility of the
  * continuous integration platform to take care of that.
  */
-var hasWriteAccessForReadonlyFile = false;
+let hasWriteAccessForReadonlyFile = false;
 if (!common.isWindows && process.getuid() === 0) {
   hasWriteAccessForReadonlyFile = true;
   try {
@@ -58,67 +55,105 @@ if (!common.isWindows && process.getuid() === 0) {
   }
 }
 
-assert(typeof fs.F_OK === 'number');
-assert(typeof fs.R_OK === 'number');
-assert(typeof fs.W_OK === 'number');
-assert(typeof fs.X_OK === 'number');
+assert.strictEqual(typeof fs.F_OK, 'number');
+assert.strictEqual(typeof fs.R_OK, 'number');
+assert.strictEqual(typeof fs.W_OK, 'number');
+assert.strictEqual(typeof fs.X_OK, 'number');
 
-fs.access(__filename, function(err) {
-  assert.strictEqual(err, null, 'error should not exist');
-});
+fs.access(__filename, common.mustCall((err) => {
+  assert.ifError(err);
+}));
 
-fs.access(__filename, fs.R_OK, function(err) {
-  assert.strictEqual(err, null, 'error should not exist');
-});
+fs.access(__filename, fs.R_OK, common.mustCall((err) => {
+  assert.ifError(err);
+}));
 
-fs.access(doesNotExist, function(err) {
-  assert.notEqual(err, null, 'error should exist');
+fs.access(doesNotExist, common.mustCall((err) => {
+  assert.notStrictEqual(err, null, 'error should exist');
   assert.strictEqual(err.code, 'ENOENT');
   assert.strictEqual(err.path, doesNotExist);
-});
+}));
 
-fs.access(readOnlyFile, fs.F_OK | fs.R_OK, function(err) {
-  assert.strictEqual(err, null, 'error should not exist');
-});
+fs.access(readOnlyFile, fs.F_OK | fs.R_OK, common.mustCall((err) => {
+  assert.ifError(err);
+}));
 
-fs.access(readOnlyFile, fs.W_OK, function(err) {
+fs.access(readOnlyFile, fs.W_OK, common.mustCall((err) => {
   if (hasWriteAccessForReadonlyFile) {
-    assert.equal(err, null, 'error should not exist');
+    assert.ifError(err);
   } else {
-    assert.notEqual(err, null, 'error should exist');
+    assert.notStrictEqual(err, null, 'error should exist');
     assert.strictEqual(err.path, readOnlyFile);
   }
-});
+}));
 
-assert.throws(function() {
-  fs.access(100, fs.F_OK, function(err) {});
-}, /path must be a string/);
+common.expectsError(
+  () => {
+    fs.access(100, fs.F_OK, common.mustNotCall());
+  },
+  {
+    code: 'ERR_INVALID_ARG_TYPE',
+    type: TypeError,
+    message: 'The "path" argument must be one of type string, Buffer, or URL'
+  }
+);
 
-assert.throws(function() {
-  fs.access(__filename, fs.F_OK);
-}, /"callback" argument must be a function/);
+common.expectsError(
+  () => {
+    fs.access(__filename, fs.F_OK);
+  },
+  {
+    code: 'ERR_INVALID_CALLBACK',
+    type: TypeError
+  });
 
-assert.throws(function() {
-  fs.access(__filename, fs.F_OK, {});
-}, /"callback" argument must be a function/);
+common.expectsError(
+  () => {
+    fs.access(__filename, fs.F_OK, {});
+  },
+  {
+    code: 'ERR_INVALID_CALLBACK',
+    type: TypeError
+  });
 
-assert.doesNotThrow(function() {
+assert.doesNotThrow(() => {
   fs.accessSync(__filename);
 });
 
-assert.doesNotThrow(function() {
-  var mode = fs.F_OK | fs.R_OK | fs.W_OK;
+assert.doesNotThrow(() => {
+  const mode = fs.F_OK | fs.R_OK | fs.W_OK;
 
   fs.accessSync(readWriteFile, mode);
 });
 
-assert.throws(function() {
-  fs.accessSync(doesNotExist);
-}, function(err) {
-  return err.code === 'ENOENT' && err.path === doesNotExist;
-});
+assert.throws(
+  () => { fs.accessSync(doesNotExist); },
+  (err) => {
+    assert.strictEqual(err.code, 'ENOENT');
+    assert.strictEqual(err.path, doesNotExist);
+    assert.strictEqual(
+      err.message,
+      `ENOENT: no such file or directory, access '${doesNotExist}'`
+    );
+    assert.strictEqual(err.constructor, Error);
+    assert.strictEqual(err.syscall, 'access');
+    assert.strictEqual(err.errno, uv.UV_ENOENT);
+    return true;
+  }
+);
 
-process.on('exit', function() {
-  removeFile(readOnlyFile);
-  removeFile(readWriteFile);
-});
+assert.throws(
+  () => { fs.accessSync(Buffer.from(doesNotExist)); },
+  (err) => {
+    assert.strictEqual(err.code, 'ENOENT');
+    assert.strictEqual(err.path, doesNotExist);
+    assert.strictEqual(
+      err.message,
+      `ENOENT: no such file or directory, access '${doesNotExist}'`
+    );
+    assert.strictEqual(err.constructor, Error);
+    assert.strictEqual(err.syscall, 'access');
+    assert.strictEqual(err.errno, uv.UV_ENOENT);
+    return true;
+  }
+);

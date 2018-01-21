@@ -2,13 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/v8.h"
-
+#include "src/api.h"
+#include "src/code-factory.h"
 #include "src/code-stubs.h"
+#include "src/compilation-info.h"
 #include "src/compiler.h"
-#include "src/parser.h"
-#include "src/zone.h"
-
 #include "src/compiler/common-operator.h"
 #include "src/compiler/graph.h"
 #include "src/compiler/linkage.h"
@@ -17,10 +15,14 @@
 #include "src/compiler/operator.h"
 #include "src/compiler/pipeline.h"
 #include "src/compiler/schedule.h"
+#include "src/objects-inl.h"
+#include "src/parsing/parse-info.h"
+#include "src/zone/zone.h"
 #include "test/cctest/cctest.h"
 
-using namespace v8::internal;
-using namespace v8::internal::compiler;
+namespace v8 {
+namespace internal {
+namespace compiler {
 
 static Operator dummy_operator(IrOpcode::kParameter, Operator::kNoWrite,
                                "dummy", 0, 0, 0, 0, 0, 0);
@@ -31,20 +33,24 @@ static Handle<JSFunction> Compile(const char* source) {
   Handle<String> source_code = isolate->factory()
                                    ->NewStringFromUtf8(CStrVector(source))
                                    .ToHandleChecked();
-  Handle<SharedFunctionInfo> shared_function = Compiler::CompileScript(
-      source_code, Handle<String>(), 0, 0, v8::ScriptOriginOptions(),
-      Handle<Object>(), Handle<Context>(isolate->native_context()), NULL, NULL,
-      v8::ScriptCompiler::kNoCompileOptions, NOT_NATIVES_CODE, false);
+  Handle<SharedFunctionInfo> shared =
+      Compiler::GetSharedFunctionInfoForScript(
+          source_code, MaybeHandle<String>(), 0, 0, v8::ScriptOriginOptions(),
+          MaybeHandle<Object>(), Handle<Context>(isolate->native_context()),
+          NULL, NULL, v8::ScriptCompiler::kNoCompileOptions, NOT_NATIVES_CODE,
+          MaybeHandle<FixedArray>())
+          .ToHandleChecked();
   return isolate->factory()->NewFunctionFromSharedFunctionInfo(
-      shared_function, isolate->native_context());
+      shared, isolate->native_context());
 }
 
 
 TEST(TestLinkageCreate) {
   HandleAndZoneScope handles;
   Handle<JSFunction> function = Compile("a + b");
-  ParseInfo parse_info(handles.main_zone(), function);
-  CompilationInfo info(&parse_info);
+  Handle<SharedFunctionInfo> shared(function->shared());
+  CompilationInfo info(handles.main_zone(), function->GetIsolate(), shared,
+                       function);
   CallDescriptor* descriptor = Linkage::ComputeIncoming(info.zone(), &info);
   CHECK(descriptor);
 }
@@ -56,10 +62,12 @@ TEST(TestLinkageJSFunctionIncoming) {
 
   for (int i = 0; i < 3; i++) {
     HandleAndZoneScope handles;
-    Handle<JSFunction> function = v8::Utils::OpenHandle(
-        *v8::Handle<v8::Function>::Cast(CompileRun(sources[i])));
-    ParseInfo parse_info(handles.main_zone(), function);
-    CompilationInfo info(&parse_info);
+    Handle<JSFunction> function =
+        Handle<JSFunction>::cast(v8::Utils::OpenHandle(
+            *v8::Local<v8::Function>::Cast(CompileRun(sources[i]))));
+    Handle<SharedFunctionInfo> shared(function->shared());
+    CompilationInfo info(handles.main_zone(), function->GetIsolate(), shared,
+                         function);
     CallDescriptor* descriptor = Linkage::ComputeIncoming(info.zone(), &info);
     CHECK(descriptor);
 
@@ -71,25 +79,12 @@ TEST(TestLinkageJSFunctionIncoming) {
 }
 
 
-TEST(TestLinkageCodeStubIncoming) {
-  Isolate* isolate = CcTest::InitIsolateOnce();
-  Zone zone;
-  ToNumberStub stub(isolate);
-  CompilationInfo info(&stub, isolate, &zone);
-  CallDescriptor* descriptor = Linkage::ComputeIncoming(&zone, &info);
-  CHECK(descriptor);
-  CHECK_EQ(0, static_cast<int>(descriptor->StackParameterCount()));
-  CHECK_EQ(1, static_cast<int>(descriptor->ReturnCount()));
-  CHECK_EQ(Operator::kNoProperties, descriptor->properties());
-  CHECK_EQ(false, descriptor->IsJSFunctionCall());
-}
-
-
 TEST(TestLinkageJSCall) {
   HandleAndZoneScope handles;
   Handle<JSFunction> function = Compile("a + c");
-  ParseInfo parse_info(handles.main_zone(), function);
-  CompilationInfo info(&parse_info);
+  Handle<SharedFunctionInfo> shared(function->shared());
+  CompilationInfo info(handles.main_zone(), function->GetIsolate(), shared,
+                       function);
 
   for (int i = 0; i < 32; i++) {
     CallDescriptor* descriptor = Linkage::GetJSCallDescriptor(
@@ -109,5 +104,21 @@ TEST(TestLinkageRuntimeCall) {
 
 
 TEST(TestLinkageStubCall) {
+  Isolate* isolate = CcTest::InitIsolateOnce();
+  Zone zone(isolate->allocator(), ZONE_NAME);
+  Callable callable = Builtins::CallableFor(isolate, Builtins::kToNumber);
+  CompilationInfo info(ArrayVector("test"), isolate, &zone, Code::STUB);
+  CallDescriptor* descriptor = Linkage::GetStubCallDescriptor(
+      isolate, &zone, callable.descriptor(), 0, CallDescriptor::kNoFlags,
+      Operator::kNoProperties);
+  CHECK(descriptor);
+  CHECK_EQ(0, static_cast<int>(descriptor->StackParameterCount()));
+  CHECK_EQ(1, static_cast<int>(descriptor->ReturnCount()));
+  CHECK_EQ(Operator::kNoProperties, descriptor->properties());
+  CHECK_EQ(false, descriptor->IsJSFunctionCall());
   // TODO(titzer): test linkage creation for outgoing stub calls.
 }
+
+}  // namespace compiler
+}  // namespace internal
+}  // namespace v8

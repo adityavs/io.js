@@ -31,6 +31,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -40,11 +41,9 @@
 #include <sys/resource.h> /* getrusage */
 #include <pwd.h>
 
-#ifdef __linux__
-# include <sys/ioctl.h>
-#endif
-
 #ifdef __sun
+# include <netdb.h> /* MAXHOSTNAMELEN on Solaris */
+# include <sys/filio.h>
 # include <sys/types.h>
 # include <sys/wait.h>
 #endif
@@ -52,17 +51,26 @@
 #ifdef __APPLE__
 # include <mach-o/dyld.h> /* _NSGetExecutablePath */
 # include <sys/filio.h>
-# include <sys/ioctl.h>
+# if defined(O_CLOEXEC)
+#  define UV__O_CLOEXEC O_CLOEXEC
+# endif
 #endif
 
-#if defined(__FreeBSD__) || defined(__DragonFly__)
+#if defined(__DragonFly__)      || \
+    defined(__FreeBSD__)        || \
+    defined(__FreeBSD_kernel__) || \
+    defined(__NetBSD__)
 # include <sys/sysctl.h>
 # include <sys/filio.h>
-# include <sys/ioctl.h>
 # include <sys/wait.h>
 # define UV__O_CLOEXEC O_CLOEXEC
 # if defined(__FreeBSD__) && __FreeBSD__ >= 10
 #  define uv__accept4 accept4
+# endif
+# if defined(__NetBSD__)
+#  define uv__accept4(a, b, c, d) paccept((a), (b), (c), NULL, (d))
+# endif
+# if (defined(__FreeBSD__) && __FreeBSD__ >= 10) || defined(__NetBSD__)
 #  define UV__SOCK_NONBLOCK SOCK_NONBLOCK
 #  define UV__SOCK_CLOEXEC  SOCK_CLOEXEC
 # endif
@@ -71,8 +79,21 @@
 # endif
 #endif
 
-#ifdef _AIX
+#if defined(__ANDROID_API__) && __ANDROID_API__ < 21
+# include <dlfcn.h>  /* for dlsym */
+#endif
+
+#if defined(__MVS__)
 #include <sys/ioctl.h>
+#endif
+
+#if !defined(__MVS__)
+#include <sys/param.h> /* MAXHOSTNAMELEN on Linux and the BSDs */
+#endif
+
+/* Fallback for the maximum hostname length */
+#ifndef MAXHOSTNAMELEN
+# define MAXHOSTNAMELEN 256
 #endif
 
 static int uv__run_pending(uv_loop_t* loop);
@@ -93,7 +114,7 @@ uint64_t uv_hrtime(void) {
 
 
 void uv_close(uv_handle_t* handle, uv_close_cb close_cb) {
-  assert(!(handle->flags & (UV_CLOSING | UV_CLOSED)));
+  assert(!uv__is_closing(handle));
 
   handle->flags |= UV_CLOSING;
   handle->close_cb = close_cb;
@@ -204,8 +225,14 @@ int uv__getiovmax(void) {
   return IOV_MAX;
 #elif defined(_SC_IOV_MAX)
   static int iovmax = -1;
-  if (iovmax == -1)
+  if (iovmax == -1) {
     iovmax = sysconf(_SC_IOV_MAX);
+    /* On some embedded devices (arm-linux-uclibc based ip camera),
+     * sysconf(_SC_IOV_MAX) can not get the correct value. The return
+     * value is -1 and the errno is EINPROGRESS. Degrade the value to 1.
+     */
+    if (iovmax == -1) iovmax = 1;
+  }
   return iovmax;
 #else
   return 1024;
@@ -417,6 +444,22 @@ int uv__socket(int domain, int type, int protocol) {
   return sockfd;
 }
 
+/* get a file pointer to a file in read-only and close-on-exec mode */
+FILE* uv__open_file(const char* path) {
+  int fd;
+  FILE* fp;
+
+  fd = uv__open_cloexec(path, O_RDONLY);
+  if (fd < 0)
+    return NULL;
+
+   fp = fdopen(fd, "r");
+   if (fp == NULL)
+     uv__close(fd);
+
+   return fp;
+}
+
 
 int uv__accept(int sockfd) {
   int peerfd;
@@ -425,7 +468,9 @@ int uv__accept(int sockfd) {
   assert(sockfd >= 0);
 
   while (1) {
-#if defined(__linux__) || __FreeBSD__ >= 10
+#if defined(__linux__)                          || \
+    (defined(__FreeBSD__) && __FreeBSD__ >= 10) || \
+    defined(__NetBSD__)
     static int no_accept4;
 
     if (no_accept4)
@@ -469,19 +514,18 @@ skip:
 }
 
 
-int uv__close(int fd) {
+int uv__close_nocheckstdio(int fd) {
   int saved_errno;
   int rc;
 
   assert(fd > -1);  /* Catch uninitialized io_watcher.fd bugs. */
-  assert(fd > STDERR_FILENO);  /* Catch stdio close bugs. */
 
   saved_errno = errno;
   rc = close(fd);
   if (rc == -1) {
     rc = -errno;
-    if (rc == -EINTR)
-      rc = -EINPROGRESS;  /* For platform/libc consistency. */
+    if (rc == -EINTR || rc == -EINPROGRESS)
+      rc = 0;    /* The close is in progress, not an error. */
     errno = saved_errno;
   }
 
@@ -489,10 +533,16 @@ int uv__close(int fd) {
 }
 
 
-#if defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || \
-    defined(_AIX) || defined(__DragonFly__)
+int uv__close(int fd) {
+  assert(fd > STDERR_FILENO);  /* Catch stdio close bugs. */
+#if defined(__MVS__)
+  epoll_file_close(fd);
+#endif
+  return uv__close_nocheckstdio(fd);
+}
 
-int uv__nonblock(int fd, int set) {
+
+int uv__nonblock_ioctl(int fd, int set) {
   int r;
 
   do
@@ -506,7 +556,8 @@ int uv__nonblock(int fd, int set) {
 }
 
 
-int uv__cloexec(int fd, int set) {
+#if !defined(__CYGWIN__) && !defined(__MSYS__)
+int uv__cloexec_ioctl(int fd, int set) {
   int r;
 
   do
@@ -518,11 +569,10 @@ int uv__cloexec(int fd, int set) {
 
   return 0;
 }
+#endif
 
-#else /* !(defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || \
-	   defined(_AIX) || defined(__DragonFly__)) */
 
-int uv__nonblock(int fd, int set) {
+int uv__nonblock_fcntl(int fd, int set) {
   int flags;
   int r;
 
@@ -553,7 +603,7 @@ int uv__nonblock(int fd, int set) {
 }
 
 
-int uv__cloexec(int fd, int set) {
+int uv__cloexec_fcntl(int fd, int set) {
   int flags;
   int r;
 
@@ -582,9 +632,6 @@ int uv__cloexec(int fd, int set) {
 
   return 0;
 }
-
-#endif /* defined(__linux__) || defined(__FreeBSD__) || defined(__APPLE__) || \
-	  defined(_AIX) || defined(__DragonFly__) */
 
 
 /* This function is not execve-safe, there is a race window
@@ -721,16 +768,14 @@ static int uv__run_pending(uv_loop_t* loop) {
   if (QUEUE_EMPTY(&loop->pending_queue))
     return 0;
 
-  QUEUE_INIT(&pq);
-  q = QUEUE_HEAD(&loop->pending_queue);
-  QUEUE_SPLIT(&loop->pending_queue, q, &pq);
+  QUEUE_MOVE(&loop->pending_queue, &pq);
 
   while (!QUEUE_EMPTY(&pq)) {
     q = QUEUE_HEAD(&pq);
     QUEUE_REMOVE(q);
     QUEUE_INIT(q);
     w = QUEUE_DATA(q, uv__io_t, pending_queue);
-    w->cb(loop, w, UV__POLLOUT);
+    w->cb(loop, w, POLLOUT);
   }
 
   return 1;
@@ -801,7 +846,7 @@ void uv__io_init(uv__io_t* w, uv__io_cb cb, int fd) {
 
 
 void uv__io_start(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
-  assert(0 == (events & ~(UV__POLLIN | UV__POLLOUT)));
+  assert(0 == (events & ~(POLLIN | POLLOUT | UV__POLLRDHUP | UV__POLLPRI)));
   assert(0 != events);
   assert(w->fd >= 0);
   assert(w->fd < INT_MAX);
@@ -814,13 +859,8 @@ void uv__io_start(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
    * every tick of the event loop but the other backends allow us to
    * short-circuit here if the event mask is unchanged.
    */
-  if (w->events == w->pevents) {
-    if (w->events == 0 && !QUEUE_EMPTY(&w->watcher_queue)) {
-      QUEUE_REMOVE(&w->watcher_queue);
-      QUEUE_INIT(&w->watcher_queue);
-    }
+  if (w->events == w->pevents)
     return;
-  }
 #endif
 
   if (QUEUE_EMPTY(&w->watcher_queue))
@@ -834,7 +874,7 @@ void uv__io_start(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
 
 
 void uv__io_stop(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
-  assert(0 == (events & ~(UV__POLLIN | UV__POLLOUT)));
+  assert(0 == (events & ~(POLLIN | POLLOUT | UV__POLLRDHUP | UV__POLLPRI)));
   assert(0 != events);
 
   if (w->fd == -1)
@@ -866,7 +906,7 @@ void uv__io_stop(uv_loop_t* loop, uv__io_t* w, unsigned int events) {
 
 
 void uv__io_close(uv_loop_t* loop, uv__io_t* w) {
-  uv__io_stop(loop, w, UV__POLLIN | UV__POLLOUT);
+  uv__io_stop(loop, w, POLLIN | POLLOUT | UV__POLLRDHUP | UV__POLLPRI);
   QUEUE_REMOVE(&w->pending_queue);
 
   /* Remove stale events for this file descriptor */
@@ -881,7 +921,7 @@ void uv__io_feed(uv_loop_t* loop, uv__io_t* w) {
 
 
 int uv__io_active(const uv__io_t* w, unsigned int events) {
-  assert(0 == (events & ~(UV__POLLIN | UV__POLLOUT)));
+  assert(0 == (events & ~(POLLIN | POLLOUT | UV__POLLRDHUP | UV__POLLPRI)));
   assert(0 != events);
   return 0 != (w->pevents & events);
 }
@@ -899,6 +939,7 @@ int uv_getrusage(uv_rusage_t* rusage) {
   rusage->ru_stime.tv_sec = usage.ru_stime.tv_sec;
   rusage->ru_stime.tv_usec = usage.ru_stime.tv_usec;
 
+#if !defined(__MVS__)
   rusage->ru_maxrss = usage.ru_maxrss;
   rusage->ru_ixrss = usage.ru_ixrss;
   rusage->ru_idrss = usage.ru_idrss;
@@ -913,6 +954,7 @@ int uv_getrusage(uv_rusage_t* rusage) {
   rusage->ru_nsignals = usage.ru_nsignals;
   rusage->ru_nvcsw = usage.ru_nvcsw;
   rusage->ru_nivcsw = usage.ru_nivcsw;
+#endif
 
   return 0;
 }
@@ -922,8 +964,7 @@ int uv__open_cloexec(const char* path, int flags) {
   int err;
   int fd;
 
-#if defined(__linux__) || (defined(__FreeBSD__) && __FreeBSD__ >= 9) || \
-    defined(__DragonFly__)
+#if defined(UV__O_CLOEXEC)
   static int no_cloexec;
 
   if (!no_cloexec) {
@@ -955,17 +996,13 @@ int uv__open_cloexec(const char* path, int flags) {
 
 int uv__dup2_cloexec(int oldfd, int newfd) {
   int r;
-#if defined(__FreeBSD__) && __FreeBSD__ >= 10
-  do
-    r = dup3(oldfd, newfd, O_CLOEXEC);
-  while (r == -1 && errno == EINTR);
+#if (defined(__FreeBSD__) && __FreeBSD__ >= 10) || defined(__NetBSD__)
+  r = dup3(oldfd, newfd, O_CLOEXEC);
   if (r == -1)
     return -errno;
   return r;
 #elif defined(__FreeBSD__) && defined(F_DUP2FD_CLOEXEC)
-  do
-    r = fcntl(oldfd, F_DUP2FD_CLOEXEC, newfd);
-  while (r == -1 && errno == EINTR);
+  r = fcntl(oldfd, F_DUP2FD_CLOEXEC, newfd);
   if (r != -1)
     return r;
   if (errno != EINVAL)
@@ -976,7 +1013,7 @@ int uv__dup2_cloexec(int oldfd, int newfd) {
   if (!no_dup3) {
     do
       r = uv__dup3(oldfd, newfd, UV__O_CLOEXEC);
-    while (r == -1 && (errno == EINTR || errno == EBUSY));
+    while (r == -1 && errno == EBUSY);
     if (r != -1)
       return r;
     if (errno != ENOSYS)
@@ -990,9 +1027,9 @@ int uv__dup2_cloexec(int oldfd, int newfd) {
     do
       r = dup2(oldfd, newfd);
 #if defined(__linux__)
-    while (r == -1 && (errno == EINTR || errno == EBUSY));
+    while (r == -1 && errno == EBUSY);
 #else
-    while (r == -1 && errno == EINTR);
+    while (0);  /* Never retry. */
 #endif
 
     if (r == -1)
@@ -1010,13 +1047,9 @@ int uv__dup2_cloexec(int oldfd, int newfd) {
 
 
 int uv_os_homedir(char* buffer, size_t* size) {
-  struct passwd pw;
-  struct passwd* result;
+  uv_passwd_t pwd;
   char* buf;
-  uid_t uid;
-  size_t bufsize;
   size_t len;
-  long initsize;
   int r;
 
   if (buffer == NULL || size == NULL || *size == 0)
@@ -1029,7 +1062,7 @@ int uv_os_homedir(char* buffer, size_t* size) {
     len = strlen(buf);
 
     if (len >= *size) {
-      *size = len;
+      *size = len + 1;
       return -ENOBUFS;
     }
 
@@ -1039,7 +1072,102 @@ int uv_os_homedir(char* buffer, size_t* size) {
     return 0;
   }
 
-  /* HOME is not set, so call getpwuid() */
+  /* HOME is not set, so call uv__getpwuid_r() */
+  r = uv__getpwuid_r(&pwd);
+
+  if (r != 0) {
+    return r;
+  }
+
+  len = strlen(pwd.homedir);
+
+  if (len >= *size) {
+    *size = len + 1;
+    uv_os_free_passwd(&pwd);
+    return -ENOBUFS;
+  }
+
+  memcpy(buffer, pwd.homedir, len + 1);
+  *size = len;
+  uv_os_free_passwd(&pwd);
+
+  return 0;
+}
+
+
+int uv_os_tmpdir(char* buffer, size_t* size) {
+  const char* buf;
+  size_t len;
+
+  if (buffer == NULL || size == NULL || *size == 0)
+    return -EINVAL;
+
+#define CHECK_ENV_VAR(name)                                                   \
+  do {                                                                        \
+    buf = getenv(name);                                                       \
+    if (buf != NULL)                                                          \
+      goto return_buffer;                                                     \
+  }                                                                           \
+  while (0)
+
+  /* Check the TMPDIR, TMP, TEMP, and TEMPDIR environment variables in order */
+  CHECK_ENV_VAR("TMPDIR");
+  CHECK_ENV_VAR("TMP");
+  CHECK_ENV_VAR("TEMP");
+  CHECK_ENV_VAR("TEMPDIR");
+
+#undef CHECK_ENV_VAR
+
+  /* No temp environment variables defined */
+  #if defined(__ANDROID__)
+    buf = "/data/local/tmp";
+  #else
+    buf = "/tmp";
+  #endif
+
+return_buffer:
+  len = strlen(buf);
+
+  if (len >= *size) {
+    *size = len + 1;
+    return -ENOBUFS;
+  }
+
+  /* The returned directory should not have a trailing slash. */
+  if (len > 1 && buf[len - 1] == '/') {
+    len--;
+  }
+
+  memcpy(buffer, buf, len + 1);
+  buffer[len] = '\0';
+  *size = len;
+
+  return 0;
+}
+
+
+int uv__getpwuid_r(uv_passwd_t* pwd) {
+  struct passwd pw;
+  struct passwd* result;
+  char* buf;
+  uid_t uid;
+  size_t bufsize;
+  size_t name_size;
+  size_t homedir_size;
+  size_t shell_size;
+  long initsize;
+  int r;
+#if defined(__ANDROID_API__) && __ANDROID_API__ < 21
+  int (*getpwuid_r)(uid_t, struct passwd*, char*, size_t, struct passwd**);
+
+  getpwuid_r = dlsym(RTLD_DEFAULT, "getpwuid_r");
+  if (getpwuid_r == NULL)
+    return -ENOSYS;
+#endif
+
+  if (pwd == NULL)
+    return -EINVAL;
+
   initsize = sysconf(_SC_GETPW_R_SIZE_MAX);
 
   if (initsize <= 0)
@@ -1047,7 +1175,7 @@ int uv_os_homedir(char* buffer, size_t* size) {
   else
     bufsize = (size_t) initsize;
 
-  uid = getuid();
+  uid = geteuid();
   buf = NULL;
 
   for (;;) {
@@ -1075,17 +1203,153 @@ int uv_os_homedir(char* buffer, size_t* size) {
     return -ENOENT;
   }
 
-  len = strlen(pw.pw_dir);
+  /* Allocate memory for the username, shell, and home directory */
+  name_size = strlen(pw.pw_name) + 1;
+  homedir_size = strlen(pw.pw_dir) + 1;
+  shell_size = strlen(pw.pw_shell) + 1;
+  pwd->username = uv__malloc(name_size + homedir_size + shell_size);
 
-  if (len >= *size) {
-    *size = len;
+  if (pwd->username == NULL) {
     uv__free(buf);
-    return -ENOBUFS;
+    return -ENOMEM;
   }
 
-  memcpy(buffer, pw.pw_dir, len + 1);
-  *size = len;
+  /* Copy the username */
+  memcpy(pwd->username, pw.pw_name, name_size);
+
+  /* Copy the home directory */
+  pwd->homedir = pwd->username + name_size;
+  memcpy(pwd->homedir, pw.pw_dir, homedir_size);
+
+  /* Copy the shell */
+  pwd->shell = pwd->homedir + homedir_size;
+  memcpy(pwd->shell, pw.pw_shell, shell_size);
+
+  /* Copy the uid and gid */
+  pwd->uid = pw.pw_uid;
+  pwd->gid = pw.pw_gid;
+
   uv__free(buf);
 
   return 0;
+}
+
+
+void uv_os_free_passwd(uv_passwd_t* pwd) {
+  if (pwd == NULL)
+    return;
+
+  /*
+    The memory for name, shell, and homedir are allocated in a single
+    uv__malloc() call. The base of the pointer is stored in pwd->username, so
+    that is the field that needs to be freed.
+  */
+  uv__free(pwd->username);
+  pwd->username = NULL;
+  pwd->shell = NULL;
+  pwd->homedir = NULL;
+}
+
+
+int uv_os_get_passwd(uv_passwd_t* pwd) {
+  return uv__getpwuid_r(pwd);
+}
+
+
+int uv_translate_sys_error(int sys_errno) {
+  /* If < 0 then it's already a libuv error. */
+  return sys_errno <= 0 ? sys_errno : -sys_errno;
+}
+
+
+int uv_os_getenv(const char* name, char* buffer, size_t* size) {
+  char* var;
+  size_t len;
+
+  if (name == NULL || buffer == NULL || size == NULL || *size == 0)
+    return -EINVAL;
+
+  var = getenv(name);
+
+  if (var == NULL)
+    return -ENOENT;
+
+  len = strlen(var);
+
+  if (len >= *size) {
+    *size = len + 1;
+    return -ENOBUFS;
+  }
+
+  memcpy(buffer, var, len + 1);
+  *size = len;
+
+  return 0;
+}
+
+
+int uv_os_setenv(const char* name, const char* value) {
+  if (name == NULL || value == NULL)
+    return -EINVAL;
+
+  if (setenv(name, value, 1) != 0)
+    return -errno;
+
+  return 0;
+}
+
+
+int uv_os_unsetenv(const char* name) {
+  if (name == NULL)
+    return -EINVAL;
+
+  if (unsetenv(name) != 0)
+    return -errno;
+
+  return 0;
+}
+
+
+int uv_os_gethostname(char* buffer, size_t* size) {
+  /*
+    On some platforms, if the input buffer is not large enough, gethostname()
+    succeeds, but truncates the result. libuv can detect this and return ENOBUFS
+    instead by creating a large enough buffer and comparing the hostname length
+    to the size input.
+  */
+  char buf[MAXHOSTNAMELEN + 1];
+  size_t len;
+
+  if (buffer == NULL || size == NULL || *size == 0)
+    return -EINVAL;
+
+  if (gethostname(buf, sizeof(buf)) != 0)
+    return -errno;
+
+  buf[sizeof(buf) - 1] = '\0'; /* Null terminate, just to be safe. */
+  len = strlen(buf);
+
+  if (len >= *size) {
+    *size = len + 1;
+    return -ENOBUFS;
+  }
+
+  memcpy(buffer, buf, len + 1);
+  *size = len;
+  return 0;
+}
+
+
+uv_os_fd_t uv_get_osfhandle(int fd) {
+  return fd;
+}
+
+
+uv_pid_t uv_os_getpid(void) {
+  return getpid();
+}
+
+
+uv_pid_t uv_os_getppid(void) {
+  return getppid();
 }

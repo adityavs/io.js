@@ -10,6 +10,8 @@
 namespace v8 {
 namespace internal {
 
+class RootVisitor;
+class ThreadLocalTop;
 
 class ThreadState {
  public:
@@ -51,11 +53,6 @@ class ThreadState {
   friend class ThreadManager;
 };
 
-
-// Defined in isolate.h.
-class ThreadLocalTop;
-
-
 class ThreadVisitor {
  public:
   // ThreadLocalTop may be only available during this call.
@@ -64,7 +61,6 @@ class ThreadVisitor {
  protected:
   virtual ~ThreadVisitor() {}
 };
-
 
 class ThreadManager {
  public:
@@ -76,7 +72,7 @@ class ThreadManager {
   void FreeThreadResources();
   bool IsArchived();
 
-  void Iterate(ObjectVisitor* v);
+  void Iterate(RootVisitor* v);
   void IterateArchivedThreads(ThreadVisitor* v);
   bool IsLockedByCurrentThread() {
     return mutex_owner_.Equals(ThreadId::Current());
@@ -118,6 +114,7 @@ class ThreadManager {
 };
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_V8THREADS_H_

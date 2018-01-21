@@ -1,65 +1,75 @@
-'use strict';
-var common = require('../common');
-var assert = require('assert');
-var fs = require('fs');
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-function unlink(pathname) {
-  try {
-    fs.rmdirSync(pathname);
-  } catch (e) {
-  }
-}
+'use strict';
+const common = require('../common');
+const assert = require('assert');
+const fs = require('fs');
 
 common.refreshTmpDir();
 
-(function() {
-  var ncalls = 0;
-  var pathname = common.tmpDir + '/test1';
+{
+  const pathname = `${common.tmpDir}/test1`;
 
-  unlink(pathname);
+  fs.mkdir(pathname, common.mustCall(function(err) {
+    assert.strictEqual(err, null);
+    assert.strictEqual(common.fileExists(pathname), true);
+  }));
+}
 
-  fs.mkdir(pathname, function(err) {
-    assert.equal(err, null);
-    assert.equal(common.fileExists(pathname), true);
-    ncalls++;
-  });
+{
+  const pathname = `${common.tmpDir}/test2`;
 
-  process.on('exit', function() {
-    unlink(pathname);
-    assert.equal(ncalls, 1);
-  });
-})();
+  fs.mkdir(pathname, 0o777, common.mustCall(function(err) {
+    assert.strictEqual(err, null);
+    assert.strictEqual(common.fileExists(pathname), true);
+  }));
+}
 
-(function() {
-  var ncalls = 0;
-  var pathname = common.tmpDir + '/test2';
+{
+  const pathname = `${common.tmpDir}/test3`;
 
-  unlink(pathname);
-
-  fs.mkdir(pathname, 0o777, function(err) {
-    assert.equal(err, null);
-    assert.equal(common.fileExists(pathname), true);
-    ncalls++;
-  });
-
-  process.on('exit', function() {
-    unlink(pathname);
-    assert.equal(ncalls, 1);
-  });
-})();
-
-(function() {
-  var pathname = common.tmpDir + '/test3';
-
-  unlink(pathname);
   fs.mkdirSync(pathname);
 
-  var exists = common.fileExists(pathname);
-  unlink(pathname);
+  const exists = common.fileExists(pathname);
+  assert.strictEqual(exists, true);
+}
 
-  assert.equal(exists, true);
-})();
+[false, 1, {}, [], null, undefined].forEach((i) => {
+  common.expectsError(
+    () => fs.mkdir(i, common.mustNotCall()),
+    {
+      code: 'ERR_INVALID_ARG_TYPE',
+      type: TypeError
+    }
+  );
+  common.expectsError(
+    () => fs.mkdirSync(i),
+    {
+      code: 'ERR_INVALID_ARG_TYPE',
+      type: TypeError
+    }
+  );
+});
 
 // Keep the event loop alive so the async mkdir() requests
 // have a chance to run (since they don't ref the event loop).
-process.nextTick(function() {});
+process.nextTick(() => {});

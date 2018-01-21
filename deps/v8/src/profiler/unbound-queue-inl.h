@@ -66,7 +66,7 @@ void UnboundQueue<Record>::Enqueue(const Record& rec) {
 
 template<typename Record>
 bool UnboundQueue<Record>::IsEmpty() const {
-  return base::NoBarrier_Load(&divider_) == base::NoBarrier_Load(&last_);
+  return base::Relaxed_Load(&divider_) == base::Relaxed_Load(&last_);
 }
 
 
@@ -77,6 +77,7 @@ Record* UnboundQueue<Record>::Peek() const {
   return &next->value;
 }
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_PROFILER_UNBOUND_QUEUE_INL_H_

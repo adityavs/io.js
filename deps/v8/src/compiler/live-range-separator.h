@@ -5,8 +5,7 @@
 #ifndef V8_LIVE_RANGE_SEPARATOR_H_
 #define V8_LIVE_RANGE_SEPARATOR_H_
 
-
-#include <src/zone.h>
+#include "src/zone/zone.h"
 namespace v8 {
 namespace internal {
 
@@ -46,6 +45,11 @@ class LiveRangeMerger final : public ZoneObject {
  private:
   RegisterAllocationData* data() const { return data_; }
   Zone* zone() const { return zone_; }
+
+  // Mark ranges spilled in deferred blocks, that also cover non-deferred code.
+  // We do nothing special for ranges fully contained in deferred blocks,
+  // because they would "spill in deferred blocks" anyway.
+  void MarkRangesSpilledInDeferredBlocks();
 
   RegisterAllocationData* const data_;
   Zone* const zone_;

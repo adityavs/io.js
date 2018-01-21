@@ -8,12 +8,12 @@
 #include "src/handles-inl.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
-#include "src/zone.h"
+#include "src/zone/zone.h"
 
 namespace v8 {
 namespace internal {
 
-DependentCode* CompilationDependencies::Get(Handle<Object> object) {
+DependentCode* CompilationDependencies::Get(Handle<Object> object) const {
   if (object->IsMap()) {
     return Handle<Map>::cast(object)->dependent_code();
   } else if (object->IsPropertyCell()) {
@@ -22,7 +22,6 @@ DependentCode* CompilationDependencies::Get(Handle<Object> object) {
     return Handle<AllocationSite>::cast(object)->dependent_code();
   }
   UNREACHABLE();
-  return nullptr;
 }
 
 
@@ -106,16 +105,48 @@ void CompilationDependencies::Rollback() {
 }
 
 
+void CompilationDependencies::AssumeMapNotDeprecated(Handle<Map> map) {
+  DCHECK(!map->is_deprecated());
+  // Do nothing if the map cannot be deprecated.
+  if (map->CanBeDeprecated()) {
+    Insert(DependentCode::kTransitionGroup, map);
+  }
+}
+
+
+void CompilationDependencies::AssumeMapStable(Handle<Map> map) {
+  DCHECK(map->is_stable());
+  // Do nothing if the map cannot transition.
+  if (map->CanTransition()) {
+    Insert(DependentCode::kPrototypeCheckGroup, map);
+  }
+}
+
+
+void CompilationDependencies::AssumePrototypeMapsStable(
+    Handle<Map> map, MaybeHandle<JSReceiver> prototype) {
+  for (PrototypeIterator i(map); !i.IsAtEnd(); i.Advance()) {
+    Handle<JSReceiver> const current =
+        PrototypeIterator::GetCurrent<JSReceiver>(i);
+    AssumeMapStable(handle(current->map()));
+    Handle<JSReceiver> last;
+    if (prototype.ToHandle(&last) && last.is_identical_to(current)) {
+      break;
+    }
+  }
+}
+
+
 void CompilationDependencies::AssumeTransitionStable(
     Handle<AllocationSite> site) {
   // Do nothing if the object doesn't have any useful element transitions left.
-  ElementsKind kind =
-      site->SitePointsToLiteral()
-          ? JSObject::cast(site->transition_info())->GetElementsKind()
-          : site->GetElementsKind();
-  if (AllocationSite::GetMode(kind) == TRACK_ALLOCATION_SITE) {
+  ElementsKind kind = site->PointsToLiteral()
+                          ? site->boilerplate()->GetElementsKind()
+                          : site->GetElementsKind();
+  if (AllocationSite::ShouldTrack(kind)) {
     Insert(DependentCode::kAllocationSiteTransitionChangedGroup, site);
   }
 }
+
 }  // namespace internal
 }  // namespace v8

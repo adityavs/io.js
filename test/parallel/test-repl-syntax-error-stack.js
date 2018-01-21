@@ -1,10 +1,9 @@
 'use strict';
 
 const common = require('../common');
+const fixtures = require('../common/fixtures');
 const assert = require('assert');
-const path = require('path');
 const repl = require('repl');
-const util = require('util');
 let found = false;
 
 process.on('exit', () => {
@@ -12,13 +11,18 @@ process.on('exit', () => {
 });
 
 common.ArrayStream.prototype.write = function(output) {
-  if (/var foo bar;/.test(output))
+  // Matching only on a minimal piece of the stack because the string will vary
+  // greatly depending on the JavaScript engine. V8 includes `;` because it
+  // displays the line of code (`var foo bar;`) that is causing a problem.
+  // ChakraCore does not display the line of code but includes `;` in the phrase
+  // `Expected ';' `.
+  if (/;/.test(output))
     found = true;
 };
 
 const putIn = new common.ArrayStream();
-const testMe = repl.start('', putIn);
-let file = path.resolve(__dirname, '../fixtures/syntax/bad_syntax');
+repl.start('', putIn);
+let file = fixtures.path('syntax', 'bad_syntax');
 
 if (common.isWindows)
   file = file.replace(/\\/g, '\\\\');

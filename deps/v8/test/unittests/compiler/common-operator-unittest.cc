@@ -13,7 +13,7 @@
 namespace v8 {
 namespace internal {
 namespace compiler {
-
+namespace common_operator_unittest {
 
 // -----------------------------------------------------------------------------
 // Shared operators.
@@ -38,7 +38,6 @@ std::ostream& operator<<(std::ostream& os, const SharedOperator& fop) {
   return os << IrOpcode::Mnemonic(fop.opcode);
 }
 
-
 const SharedOperator kSharedOperators[] = {
 #define SHARED(Name, properties, value_input_count, effect_input_count,      \
                control_input_count, value_output_count, effect_output_count, \
@@ -52,8 +51,8 @@ const SharedOperator kSharedOperators[] = {
     SHARED(IfTrue, Operator::kKontrol, 0, 0, 1, 0, 0, 1),
     SHARED(IfFalse, Operator::kKontrol, 0, 0, 1, 0, 0, 1),
     SHARED(IfSuccess, Operator::kKontrol, 0, 0, 1, 0, 0, 1),
-    SHARED(Throw, Operator::kKontrol, 1, 1, 1, 0, 0, 1),
-    SHARED(Return, Operator::kNoThrow, 1, 1, 1, 0, 0, 1),
+    SHARED(IfException, Operator::kKontrol, 0, 1, 1, 1, 1, 1),
+    SHARED(Throw, Operator::kKontrol, 0, 1, 1, 0, 0, 1),
     SHARED(Terminate, Operator::kKontrol, 0, 1, 1, 0, 0, 1)
 #undef SHARED
 };
@@ -188,6 +187,22 @@ TEST_F(CommonOperatorTest, End) {
 }
 
 
+TEST_F(CommonOperatorTest, Return) {
+  TRACED_FOREACH(int, input_count, kArguments) {
+    const Operator* const op = common()->Return(input_count);
+    EXPECT_EQ(IrOpcode::kReturn, op->opcode());
+    EXPECT_EQ(Operator::kNoThrow, op->properties());
+    EXPECT_EQ(input_count + 1, op->ValueInputCount());
+    EXPECT_EQ(1, op->EffectInputCount());
+    EXPECT_EQ(1, op->ControlInputCount());
+    EXPECT_EQ(3 + input_count, OperatorProperties::GetTotalInputCount(op));
+    EXPECT_EQ(0, op->ValueOutputCount());
+    EXPECT_EQ(0, op->EffectOutputCount());
+    EXPECT_EQ(1, op->ControlOutputCount());
+  }
+}
+
+
 TEST_F(CommonOperatorTest, Branch) {
   TRACED_FOREACH(BranchHint, hint, kBranchHints) {
     const Operator* const op = common()->Branch(hint);
@@ -201,24 +216,6 @@ TEST_F(CommonOperatorTest, Branch) {
     EXPECT_EQ(0, op->ValueOutputCount());
     EXPECT_EQ(0, op->EffectOutputCount());
     EXPECT_EQ(2, op->ControlOutputCount());
-  }
-}
-
-
-TEST_F(CommonOperatorTest, IfException) {
-  static const IfExceptionHint kIfExceptionHints[] = {
-      IfExceptionHint::kLocallyCaught, IfExceptionHint::kLocallyUncaught};
-  TRACED_FOREACH(IfExceptionHint, hint, kIfExceptionHints) {
-    const Operator* const op = common()->IfException(hint);
-    EXPECT_EQ(IrOpcode::kIfException, op->opcode());
-    EXPECT_EQ(Operator::kKontrol, op->properties());
-    EXPECT_EQ(0, op->ValueInputCount());
-    EXPECT_EQ(1, op->EffectInputCount());
-    EXPECT_EQ(1, op->ControlInputCount());
-    EXPECT_EQ(2, OperatorProperties::GetTotalInputCount(op));
-    EXPECT_EQ(1, op->ValueOutputCount());
-    EXPECT_EQ(1, op->EffectOutputCount());
-    EXPECT_EQ(1, op->ControlOutputCount());
   }
 }
 
@@ -257,16 +254,19 @@ TEST_F(CommonOperatorTest, IfValue) {
 
 
 TEST_F(CommonOperatorTest, Select) {
-  static const MachineType kTypes[] = {
-      kMachInt8,    kMachUint8,   kMachInt16,    kMachUint16,
-      kMachInt32,   kMachUint32,  kMachInt64,    kMachUint64,
-      kMachFloat32, kMachFloat64, kMachAnyTagged};
-  TRACED_FOREACH(MachineType, type, kTypes) {
+  static const MachineRepresentation kMachineRepresentations[] = {
+      MachineRepresentation::kBit,     MachineRepresentation::kWord8,
+      MachineRepresentation::kWord16,  MachineRepresentation::kWord32,
+      MachineRepresentation::kWord64,  MachineRepresentation::kFloat32,
+      MachineRepresentation::kFloat64, MachineRepresentation::kTagged};
+
+
+  TRACED_FOREACH(MachineRepresentation, rep, kMachineRepresentations) {
     TRACED_FOREACH(BranchHint, hint, kBranchHints) {
-      const Operator* const op = common()->Select(type, hint);
+      const Operator* const op = common()->Select(rep, hint);
       EXPECT_EQ(IrOpcode::kSelect, op->opcode());
       EXPECT_EQ(Operator::kPure, op->properties());
-      EXPECT_EQ(type, SelectParametersOf(op).type());
+      EXPECT_EQ(rep, SelectParametersOf(op).representation());
       EXPECT_EQ(hint, SelectParametersOf(op).hint());
       EXPECT_EQ(3, op->ValueInputCount());
       EXPECT_EQ(0, op->EffectInputCount());
@@ -343,30 +343,51 @@ TEST_F(CommonOperatorTest, NumberConstant) {
 }
 
 
-TEST_F(CommonOperatorTest, ValueEffect) {
-  TRACED_FOREACH(int, arguments, kArguments) {
-    const Operator* op = common()->ValueEffect(arguments);
-    EXPECT_EQ(arguments, op->ValueInputCount());
-    EXPECT_EQ(arguments, OperatorProperties::GetTotalInputCount(op));
+TEST_F(CommonOperatorTest, BeginRegion) {
+  {
+    const Operator* op =
+        common()->BeginRegion(RegionObservability::kObservable);
+    EXPECT_EQ(1, op->EffectInputCount());
+    EXPECT_EQ(1, OperatorProperties::GetTotalInputCount(op));
+    EXPECT_EQ(0, op->ControlOutputCount());
+    EXPECT_EQ(1, op->EffectOutputCount());
+    EXPECT_EQ(0, op->ValueOutputCount());
+  }
+  {
+    const Operator* op =
+        common()->BeginRegion(RegionObservability::kNotObservable);
+    EXPECT_EQ(1, op->EffectInputCount());
+    EXPECT_EQ(1, OperatorProperties::GetTotalInputCount(op));
     EXPECT_EQ(0, op->ControlOutputCount());
     EXPECT_EQ(1, op->EffectOutputCount());
     EXPECT_EQ(0, op->ValueOutputCount());
   }
 }
 
+TEST_F(CommonOperatorTest, FinishRegion) {
+  const Operator* op = common()->FinishRegion();
+  EXPECT_EQ(1, op->ValueInputCount());
+  EXPECT_EQ(1, op->EffectInputCount());
+  EXPECT_EQ(2, OperatorProperties::GetTotalInputCount(op));
+  EXPECT_EQ(0, op->ControlOutputCount());
+  EXPECT_EQ(1, op->EffectOutputCount());
+  EXPECT_EQ(1, op->ValueOutputCount());
+}
 
-TEST_F(CommonOperatorTest, Finish) {
-  TRACED_FOREACH(int, arguments, kArguments) {
-    const Operator* op = common()->Finish(arguments);
+TEST_F(CommonOperatorTest, Projection) {
+  TRACED_FORRANGE(size_t, index, 0, 3) {
+    const Operator* op = common()->Projection(index);
+    EXPECT_EQ(index, ProjectionIndexOf(op));
     EXPECT_EQ(1, op->ValueInputCount());
-    EXPECT_EQ(arguments, op->EffectInputCount());
-    EXPECT_EQ(arguments + 1, OperatorProperties::GetTotalInputCount(op));
+    EXPECT_EQ(1, op->ControlInputCount());
+    EXPECT_EQ(2, OperatorProperties::GetTotalInputCount(op));
     EXPECT_EQ(0, op->ControlOutputCount());
     EXPECT_EQ(0, op->EffectOutputCount());
     EXPECT_EQ(1, op->ValueOutputCount());
   }
 }
 
+}  // namespace common_operator_unittest
 }  // namespace compiler
 }  // namespace internal
 }  // namespace v8

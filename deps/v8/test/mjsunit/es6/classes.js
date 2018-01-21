@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-// Flags: --harmony-sloppy
+// Flags: --allow-natives-syntax --harmony-do-expressions
 
 (function TestBasics() {
   var C = class C {}
@@ -22,13 +22,11 @@
   class D2 { constructor() {} }
   assertEquals('D2', D2.name);
 
-  // TODO(arv): The logic for the name of anonymous functions in ES6 requires
-  // the below to be 'E';
   var E = class {}
-  assertEquals('', E.name);  // Should be 'E'.
+  assertEquals('E', E.name);  // Should be 'E'.
 
   var F = class { constructor() {} };
-  assertEquals('', F.name);  // Should be 'F'.
+  assertEquals('F', F.name);  // Should be 'F'.
 })();
 
 
@@ -166,14 +164,15 @@
                SyntaxError);
 
   var D = class extends function() {
-    arguments.caller;
+    this.args = arguments;
   } {};
   assertThrows(function() {
     Object.getPrototypeOf(D).arguments;
   }, TypeError);
-  assertThrows(function() {
-    new D;
-  }, TypeError);
+  var e = new D();
+  assertThrows(() => e.args.callee, TypeError);
+  assertEquals(undefined, Object.getOwnPropertyDescriptor(e.args, 'caller'));
+  assertFalse('caller' in e.args);
 })();
 
 
@@ -626,6 +625,56 @@ function assertAccessorDescriptor(object, name) {
 })();
 
 
+(function TestConstructorCall(){
+  var realmIndex = Realm.create();
+  var otherTypeError = Realm.eval(realmIndex, "TypeError");
+  var A = Realm.eval(realmIndex, '"use strict"; class A {}; A');
+  var instance = new A();
+  var constructor = instance.constructor;
+  var otherTypeError = Realm.eval(realmIndex, 'TypeError');
+  if (otherTypeError === TypeError) {
+    throw Error('Should not happen!');
+  }
+
+  // ES6 9.2.1[[Call]] throws a TypeError in the caller context/Realm when the
+  // called function is a classConstructor
+  assertThrows(function() { Realm.eval(realmIndex, "A()") }, otherTypeError);
+  assertThrows(function() { instance.constructor() }, TypeError);
+  assertThrows(function() { A() }, TypeError);
+
+  // ES6 9.3.1 call() first activates the callee context before invoking the
+  // method. The TypeError from the constructor is thus thrown in the other
+  // Realm.
+  assertThrows(function() { Realm.eval(realmIndex, "A.call()") },
+      otherTypeError);
+  assertThrows(function() { constructor.call() }, otherTypeError);
+  assertThrows(function() { A.call() }, otherTypeError);
+})();
+
+
+(function TestConstructorCallOptimized() {
+  class A { };
+
+  function invoke_constructor() { A() }
+  function call_constructor() { A.call() }
+  function apply_constructor() { A.apply() }
+
+  for (var i=0; i<3; i++) {
+    assertThrows(invoke_constructor);
+    assertThrows(call_constructor);
+    assertThrows(apply_constructor);
+  }
+  // Make sure we still check for class constructors when calling optimized
+  // code.
+  %OptimizeFunctionOnNextCall(invoke_constructor);
+  assertThrows(invoke_constructor);
+  %OptimizeFunctionOnNextCall(call_constructor);
+  assertThrows(call_constructor);
+  %OptimizeFunctionOnNextCall(apply_constructor);
+  assertThrows(apply_constructor);
+})();
+
+
 (function TestDefaultConstructor() {
   var calls = 0;
   class Base {
@@ -945,4 +994,56 @@ function testClassRestrictedProperties(C) {
   testClassRestrictedProperties(class extends Class { });
   testClassRestrictedProperties(
       class extends Class { constructor() { super(); } });
+})();
+
+
+(function testReturnFromClassLiteral() {
+
+  function usingDoExpressionInBody() {
+    let x = 42;
+    let dummy = function() {x};
+    try {
+      class C {
+        dummy() {C}
+        [do {return}]() {}
+      };
+    } finally {
+      return x;
+    }
+  }
+  assertEquals(42, usingDoExpressionInBody());
+
+  function usingDoExpressionInExtends() {
+    let x = 42;
+    let dummy = function() {x};
+    try {
+      class C extends (do {return}) { dummy() {C} };
+    } finally {
+      return x;
+    }
+  }
+  assertEquals(42, usingDoExpressionInExtends());
+
+  function usingYieldInBody() {
+    function* foo() {
+      class C {
+        [yield]() {}
+      }
+    }
+    var g = foo();
+    g.next();
+    return g.return(42).value;
+  }
+  assertEquals(42, usingYieldInBody());
+
+  function usingYieldInExtends() {
+    function* foo() {
+      class C extends (yield) {};
+    }
+    var g = foo();
+    g.next();
+    return g.return(42).value;
+  }
+  assertEquals(42, usingYieldInExtends());
+
 })();

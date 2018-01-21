@@ -37,6 +37,8 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "src/base/platform/platform-posix.h"
+
 #include "src/base/lazy-instance.h"
 #include "src/base/macros.h"
 #include "src/base/platform/platform.h"
@@ -55,7 +57,7 @@
 #include <sys/prctl.h>  // NOLINT, for prctl
 #endif
 
-#if !defined(V8_OS_NACL) && !defined(_AIX)
+#if !defined(_AIX) && !defined(V8_OS_FUCHSIA)
 #include <sys/syscall.h>
 #endif
 
@@ -81,6 +83,8 @@ int OS::ActivationFrameAlignment() {
   return 8;
 #elif V8_TARGET_ARCH_MIPS
   return 8;
+#elif V8_TARGET_ARCH_S390
+  return 8;
 #else
   // Otherwise we just assume 16 byte alignment, i.e.:
   // - With gcc 4.4 the tree vectorization optimizer can generate code
@@ -97,6 +101,13 @@ intptr_t OS::CommitPageSize() {
   return page_size;
 }
 
+void* OS::Allocate(const size_t requested, size_t* allocated,
+                   bool is_executable, void* hint) {
+  return OS::Allocate(requested, allocated,
+                      is_executable ? OS::MemoryPermission::kReadWriteExecute
+                                    : OS::MemoryPermission::kReadWrite,
+                      hint);
+}
 
 void OS::Free(void* address, const size_t size) {
   // TODO(1240712): munmap has a return value which is ignored here.
@@ -111,10 +122,6 @@ void OS::ProtectCode(void* address, const size_t size) {
 #if V8_OS_CYGWIN
   DWORD old_protect;
   VirtualProtect(address, size, PAGE_EXECUTE_READ, &old_protect);
-#elif V8_OS_NACL
-  // The Native Client port of V8 uses an interpreter, so
-  // code pages don't need PROT_EXEC.
-  mprotect(address, size, PROT_READ);
 #else
   mprotect(address, size, PROT_READ | PROT_EXEC);
 #endif
@@ -122,6 +129,7 @@ void OS::ProtectCode(void* address, const size_t size) {
 
 
 // Create guard pages.
+#if !V8_OS_FUCHSIA
 void OS::Guard(void* address, const size_t size) {
 #if V8_OS_CYGWIN
   DWORD oldprotect;
@@ -130,17 +138,19 @@ void OS::Guard(void* address, const size_t size) {
   mprotect(address, size, PROT_NONE);
 #endif
 }
+#endif  // !V8_OS_FUCHSIA
 
+// Make a region of memory readable and writable.
+void OS::Unprotect(void* address, const size_t size) {
+#if V8_OS_CYGWIN
+  DWORD oldprotect;
+  VirtualProtect(address, size, PAGE_READWRITE, &oldprotect);
+#else
+  mprotect(address, size, PROT_READ | PROT_WRITE);
+#endif
+}
 
-static LazyInstance<RandomNumberGenerator>::type
-    platform_random_number_generator = LAZY_INSTANCE_INITIALIZER;
-
-
-void OS::Initialize(int64_t random_seed, bool hard_abort,
-                    const char* const gc_fake_mmap) {
-  if (random_seed) {
-    platform_random_number_generator.Pointer()->SetSeed(random_seed);
-  }
+void OS::Initialize(bool hard_abort, const char* const gc_fake_mmap) {
   g_hard_abort = hard_abort;
   g_gc_fake_mmap = gc_fake_mmap;
 }
@@ -148,69 +158,6 @@ void OS::Initialize(int64_t random_seed, bool hard_abort,
 
 const char* OS::GetGCFakeMMapFile() {
   return g_gc_fake_mmap;
-}
-
-
-void* OS::GetRandomMmapAddr() {
-#if V8_OS_NACL
-  // TODO(bradchen): restore randomization once Native Client gets
-  // smarter about using mmap address hints.
-  // See http://code.google.com/p/nativeclient/issues/3341
-  return NULL;
-#endif
-#if defined(ADDRESS_SANITIZER) || defined(MEMORY_SANITIZER) || \
-    defined(THREAD_SANITIZER)
-  // Dynamic tools do not support custom mmap addresses.
-  return NULL;
-#endif
-  uintptr_t raw_addr;
-  platform_random_number_generator.Pointer()->NextBytes(&raw_addr,
-                                                        sizeof(raw_addr));
-#if V8_TARGET_ARCH_X64
-  // Currently available CPUs have 48 bits of virtual addressing.  Truncate
-  // the hint address to 46 bits to give the kernel a fighting chance of
-  // fulfilling our placement request.
-  raw_addr &= V8_UINT64_C(0x3ffffffff000);
-#elif V8_TARGET_ARCH_PPC64
-#if V8_OS_AIX
-  // AIX: 64 bits of virtual addressing, but we limit address range to:
-  //   a) minimize Segment Lookaside Buffer (SLB) misses and
-  raw_addr &= V8_UINT64_C(0x3ffff000);
-  // Use extra address space to isolate the mmap regions.
-  raw_addr += V8_UINT64_C(0x400000000000);
-#elif V8_TARGET_BIG_ENDIAN
-  // Big-endian Linux: 44 bits of virtual addressing.
-  raw_addr &= V8_UINT64_C(0x03fffffff000);
-#else
-  // Little-endian Linux: 48 bits of virtual addressing.
-  raw_addr &= V8_UINT64_C(0x3ffffffff000);
-#endif
-#else
-  raw_addr &= 0x3ffff000;
-
-# ifdef __sun
-  // For our Solaris/illumos mmap hint, we pick a random address in the bottom
-  // half of the top half of the address space (that is, the third quarter).
-  // Because we do not MAP_FIXED, this will be treated only as a hint -- the
-  // system will not fail to mmap() because something else happens to already
-  // be mapped at our random address. We deliberately set the hint high enough
-  // to get well above the system's break (that is, the heap); Solaris and
-  // illumos will try the hint and if that fails allocate as if there were
-  // no hint at all. The high hint prevents the break from getting hemmed in
-  // at low values, ceding half of the address space to the system heap.
-  raw_addr += 0x80000000;
-#elif V8_OS_AIX
-  // The range 0x30000000 - 0xD0000000 is available on AIX;
-  // choose the upper range.
-  raw_addr += 0x90000000;
-# else
-  // The range 0x20000000 - 0x60000000 is relatively unpopulated across a
-  // variety of ASLR modes (PAE kernel, NX compat mode, etc) and on macos
-  // 10.6 and 10.7.
-  raw_addr += 0x20000000;
-# endif
-#endif
-  return reinterpret_cast<void*>(raw_addr);
 }
 
 
@@ -245,13 +192,12 @@ void OS::DebugBreak() {
 #elif V8_HOST_ARCH_PPC
   asm("twge 2,2");
 #elif V8_HOST_ARCH_IA32
-#if V8_OS_NACL
-  asm("hlt");
-#else
   asm("int $3");
-#endif  // V8_OS_NACL
 #elif V8_HOST_ARCH_X64
   asm("int $3");
+#elif V8_HOST_ARCH_S390
+  // Software breakpoint instruction is 0x0001
+  asm volatile(".word 0x0001");
 #else
 #error Unsupported host architecture.
 #endif
@@ -274,14 +220,13 @@ class PosixMemoryMappedFile final : public OS::MemoryMappedFile {
 
 
 // static
-OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name) {
+OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name, void* hint) {
   if (FILE* file = fopen(name, "r+")) {
     if (fseek(file, 0, SEEK_END) == 0) {
       long size = ftell(file);  // NOLINT(runtime/int)
       if (size >= 0) {
-        void* const memory =
-            mmap(OS::GetRandomMmapAddr(), size, PROT_READ | PROT_WRITE,
-                 MAP_SHARED, fileno(file), 0);
+        void* const memory = mmap(hint, size, PROT_READ | PROT_WRITE,
+                                  MAP_SHARED, fileno(file), 0);
         if (memory != MAP_FAILED) {
           return new PosixMemoryMappedFile(file, memory, size);
         }
@@ -294,13 +239,13 @@ OS::MemoryMappedFile* OS::MemoryMappedFile::open(const char* name) {
 
 
 // static
-OS::MemoryMappedFile* OS::MemoryMappedFile::create(const char* name,
+OS::MemoryMappedFile* OS::MemoryMappedFile::create(const char* name, void* hint,
                                                    size_t size, void* initial) {
   if (FILE* file = fopen(name, "w+")) {
     size_t result = fwrite(initial, 1, size, file);
     if (result == size && !ferror(file)) {
-      void* memory = mmap(OS::GetRandomMmapAddr(), result,
-                          PROT_READ | PROT_WRITE, MAP_SHARED, fileno(file), 0);
+      void* memory = mmap(hint, result, PROT_READ | PROT_WRITE, MAP_SHARED,
+                          fileno(file), 0);
       if (memory != MAP_FAILED) {
         return new PosixMemoryMappedFile(file, memory, result);
       }
@@ -331,6 +276,8 @@ int OS::GetCurrentThreadId() {
   return static_cast<int>(gettid());
 #elif V8_OS_AIX
   return static_cast<int>(thread_self());
+#elif V8_OS_FUCHSIA
+  return static_cast<int>(pthread_self());
 #elif V8_OS_SOLARIS
   return static_cast<int>(pthread_self());
 #else
@@ -344,17 +291,12 @@ int OS::GetCurrentThreadId() {
 //
 
 int OS::GetUserTime(uint32_t* secs, uint32_t* usecs) {
-#if V8_OS_NACL
-  // Optionally used in Logger::ResourceEvent.
-  return -1;
-#else
   struct rusage usage;
 
   if (getrusage(RUSAGE_SELF, &usage) < 0) return -1;
   *secs = static_cast<uint32_t>(usage.ru_utime.tv_sec);
   *usecs = static_cast<uint32_t>(usage.ru_utime.tv_usec);
   return 0;
-#endif
 }
 
 
@@ -362,29 +304,11 @@ double OS::TimeCurrentMillis() {
   return Time::Now().ToJsTime();
 }
 
-
-class TimezoneCache {};
-
-
-TimezoneCache* OS::CreateTimezoneCache() {
-  return NULL;
-}
-
-
-void OS::DisposeTimezoneCache(TimezoneCache* cache) {
-  DCHECK(cache == NULL);
-}
-
-
-void OS::ClearTimezoneCache(TimezoneCache* cache) {
-  DCHECK(cache == NULL);
-}
-
-
-double OS::DaylightSavingsOffset(double time, TimezoneCache*) {
+double PosixTimezoneCache::DaylightSavingsOffset(double time) {
   if (std::isnan(time)) return std::numeric_limits<double>::quiet_NaN();
   time_t tv = static_cast<time_t>(std::floor(time/msPerSecond));
-  struct tm* t = localtime(&tv);  // NOLINT(runtime/threadsafe_fn)
+  struct tm tm;
+  struct tm* t = localtime_r(&tv, &tm);
   if (NULL == t) return std::numeric_limits<double>::quiet_NaN();
   return t->tm_isdst > 0 ? 3600 * msPerSecond : 0;
 }
@@ -403,7 +327,10 @@ FILE* OS::FOpen(const char* path, const char* mode) {
   FILE* file = fopen(path, mode);
   if (file == NULL) return NULL;
   struct stat file_stat;
-  if (fstat(fileno(file), &file_stat) != 0) return NULL;
+  if (fstat(fileno(file), &file_stat) != 0) {
+    fclose(file);
+    return NULL;
+  }
   bool is_regular_file = ((file_stat.st_mode & S_IFREG) != 0);
   if (is_regular_file) return file;
   fclose(file);
@@ -415,9 +342,10 @@ bool OS::Remove(const char* path) {
   return (remove(path) == 0);
 }
 
+char OS::DirectorySeparator() { return '/'; }
 
 bool OS::isDirectorySeparator(const char ch) {
-  return ch == '/';
+  return ch == DirectorySeparator();
 }
 
 
@@ -599,20 +527,20 @@ void Thread::Start() {
   memset(&attr, 0, sizeof(attr));
   result = pthread_attr_init(&attr);
   DCHECK_EQ(0, result);
-  // Native client uses default stack size.
-#if !V8_OS_NACL
   size_t stack_size = stack_size_;
-#if V8_OS_AIX
   if (stack_size == 0) {
-    // Default on AIX is 96KB -- bump up to 2MB
+#if V8_OS_MACOSX
+    // Default on Mac OS X is 512kB -- bump up to 1MB
+    stack_size = 1 * 1024 * 1024;
+#elif V8_OS_AIX
+    // Default on AIX is 96kB -- bump up to 2MB
     stack_size = 2 * 1024 * 1024;
-  }
 #endif
+  }
   if (stack_size > 0) {
     result = pthread_attr_setstacksize(&attr, stack_size);
     DCHECK_EQ(0, result);
   }
-#endif
   {
     LockGuard<Mutex> lock_guard(&data_->thread_creation_mutex_);
     result = pthread_create(&data_->thread_, &attr, ThreadEntry, this);
@@ -751,6 +679,18 @@ void Thread::SetThreadLocal(LocalStorageKey key, void* value) {
   int result = pthread_setspecific(pthread_key, value);
   DCHECK_EQ(0, result);
   USE(result);
+}
+
+int GetProtectionFromMemoryPermission(OS::MemoryPermission access) {
+  switch (access) {
+    case OS::MemoryPermission::kNoAccess:
+      return PROT_NONE;
+    case OS::MemoryPermission::kReadWrite:
+      return PROT_READ | PROT_WRITE;
+    case OS::MemoryPermission::kReadWriteExecute:
+      return PROT_READ | PROT_WRITE | PROT_EXEC;
+  }
+  UNREACHABLE();
 }
 
 }  // namespace base

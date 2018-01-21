@@ -20,14 +20,15 @@ class ApiNatives {
   static const int kInitialFunctionCacheSize = 256;
 
   MUST_USE_RESULT static MaybeHandle<JSFunction> InstantiateFunction(
-      Handle<FunctionTemplateInfo> data);
+      Handle<FunctionTemplateInfo> data,
+      MaybeHandle<Name> maybe_name = MaybeHandle<Name>());
 
   MUST_USE_RESULT static MaybeHandle<JSObject> InstantiateObject(
-      Handle<ObjectTemplateInfo> data);
+      Handle<ObjectTemplateInfo> data,
+      Handle<JSReceiver> new_target = Handle<JSReceiver>());
 
-  MUST_USE_RESULT static MaybeHandle<FunctionTemplateInfo> ConfigureInstance(
-      Isolate* isolate, Handle<FunctionTemplateInfo> instance,
-      Handle<JSObject> data);
+  MUST_USE_RESULT static MaybeHandle<JSObject> InstantiateRemoteObject(
+      Handle<ObjectTemplateInfo> data);
 
   enum ApiInstanceType {
     JavaScriptObjectType,
@@ -35,18 +36,23 @@ class ApiNatives {
     GlobalProxyType
   };
 
-  static Handle<JSFunction> CreateApiFunction(Isolate* isolate,
-                                              Handle<FunctionTemplateInfo> obj,
-                                              Handle<Object> prototype,
-                                              ApiInstanceType instance_type);
+  static Handle<JSFunction> CreateApiFunction(
+      Isolate* isolate, Handle<FunctionTemplateInfo> obj,
+      Handle<Object> prototype, ApiInstanceType instance_type,
+      MaybeHandle<Name> maybe_name = MaybeHandle<Name>());
 
   static void AddDataProperty(Isolate* isolate, Handle<TemplateInfo> info,
                               Handle<Name> name, Handle<Object> value,
                               PropertyAttributes attributes);
 
+  static void AddDataProperty(Isolate* isolate, Handle<TemplateInfo> info,
+                              Handle<Name> name, v8::Intrinsic intrinsic,
+                              PropertyAttributes attributes);
+
   static void AddAccessorProperty(Isolate* isolate, Handle<TemplateInfo> info,
-                                  Handle<Name> name, Handle<Object> getter,
-                                  Handle<Object> setter,
+                                  Handle<Name> name,
+                                  Handle<FunctionTemplateInfo> getter,
+                                  Handle<FunctionTemplateInfo> setter,
                                   PropertyAttributes attributes);
 
   static void AddNativeDataProperty(Isolate* isolate, Handle<TemplateInfo> info,

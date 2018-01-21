@@ -1,6 +1,6 @@
 'use strict';
 require('../common');
-var assert = require('assert');
+const assert = require('assert');
 
 assert.throws(
   function() {
@@ -12,7 +12,7 @@ assert.throws(
 assert.doesNotThrow(function() {
   process.binding('buffer');
 }, function(err) {
-  if ( (err instanceof Error) ) {
+  if (err instanceof Error) {
     return true;
   }
 }, 'unexpected error');

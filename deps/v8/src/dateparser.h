@@ -7,7 +7,7 @@
 
 #include "src/allocation.h"
 #include "src/char-predicates.h"
-#include "src/scanner.h"
+#include "src/unicode-cache.h"
 
 namespace v8 {
 namespace internal {
@@ -26,7 +26,7 @@ class DateParser : public AllStatic {
   // [7]: UTC offset in seconds, or null value if no timezone specified
   // If parsing fails, return false (content of output array is not defined).
   template <typename Char>
-  static bool Parse(Vector<Char> str, FixedArray* output, UnicodeCache* cache);
+  static bool Parse(Isolate* isolate, Vector<Char> str, FixedArray* output);
 
   enum {
     YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, MILLISECOND, UTC_OFFSET, OUTPUT_SIZE
@@ -364,6 +364,7 @@ class DateParser : public AllStatic {
 };
 
 
-} }  // namespace v8::internal
+}  // namespace internal
+}  // namespace v8
 
 #endif  // V8_DATEPARSER_H_

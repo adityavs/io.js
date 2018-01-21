@@ -1,11 +1,30 @@
-#include "async-wrap.h"
-#include "async-wrap-inl.h"
-#include "env.h"
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+#include "async_wrap-inl.h"
 #include "env-inl.h"
-#include "util.h"
 #include "util-inl.h"
 #include "node.h"
 #include "handle_wrap.h"
+#include "string_bytes.h"
 
 #include <stdlib.h>
 
@@ -17,9 +36,12 @@ using v8::FunctionTemplate;
 using v8::HandleScope;
 using v8::Integer;
 using v8::Local;
+using v8::MaybeLocal;
 using v8::Object;
 using v8::String;
 using v8::Value;
+
+namespace {
 
 class FSEventWrap: public HandleWrap {
  public:
@@ -33,14 +55,17 @@ class FSEventWrap: public HandleWrap {
   size_t self_size() const override { return sizeof(*this); }
 
  private:
+  static const encoding kDefaultEncoding = UTF8;
+
   FSEventWrap(Environment* env, Local<Object> object);
-  virtual ~FSEventWrap() override;
+  ~FSEventWrap() override;
 
   static void OnEvent(uv_fs_event_t* handle, const char* filename, int events,
     int status);
 
   uv_fs_event_t handle_;
-  bool initialized_;
+  bool initialized_ = false;
+  enum encoding encoding_ = kDefaultEncoding;
 };
 
 
@@ -48,9 +73,7 @@ FSEventWrap::FSEventWrap(Environment* env, Local<Object> object)
     : HandleWrap(env,
                  object,
                  reinterpret_cast<uv_handle_t*>(&handle_),
-                 AsyncWrap::PROVIDER_FSEVENTWRAP) {
-  initialized_ = false;
-}
+                 AsyncWrap::PROVIDER_FSEVENTWRAP) {}
 
 
 FSEventWrap::~FSEventWrap() {
@@ -63,14 +86,16 @@ void FSEventWrap::Initialize(Local<Object> target,
                              Local<Context> context) {
   Environment* env = Environment::GetCurrent(context);
 
+  auto fsevent_string = FIXED_ONE_BYTE_STRING(env->isolate(), "FSEvent");
   Local<FunctionTemplate> t = env->NewFunctionTemplate(New);
   t->InstanceTemplate()->SetInternalFieldCount(1);
-  t->SetClassName(env->fsevent_string());
+  t->SetClassName(fsevent_string);
 
+  AsyncWrap::AddWrapMethods(env, t);
   env->SetProtoMethod(t, "start", Start);
   env->SetProtoMethod(t, "close", Close);
 
-  target->Set(env->fsevent_string(), t->GetFunction());
+  target->Set(fsevent_string, t->GetFunction());
 }
 
 
@@ -84,17 +109,24 @@ void FSEventWrap::New(const FunctionCallbackInfo<Value>& args) {
 void FSEventWrap::Start(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
-  FSEventWrap* wrap = Unwrap<FSEventWrap>(args.Holder());
+  FSEventWrap* wrap;
+  ASSIGN_OR_RETURN_UNWRAP(&wrap, args.Holder());
+  if (wrap->initialized_)
+    return args.GetReturnValue().Set(0);
 
-  if (args.Length() < 1 || !args[0]->IsString()) {
-    return env->ThrowTypeError("filename must be a valid string");
-  }
+  static const char kErrMsg[] = "filename must be a string or Buffer";
+  if (args.Length() < 1)
+    return env->ThrowTypeError(kErrMsg);
 
-  node::Utf8Value path(env->isolate(), args[0]);
+  BufferValue path(env->isolate(), args[0]);
+  if (*path == nullptr)
+    return env->ThrowTypeError(kErrMsg);
 
   unsigned int flags = 0;
   if (args[2]->IsTrue())
     flags |= UV_FS_EVENT_RECURSIVE;
+
+  wrap->encoding_ = ParseEncoding(env->isolate(), args[3], kDefaultEncoding);
 
   int err = uv_fs_event_init(wrap->env()->event_loop(), &wrap->handle_);
   if (err == 0) {
@@ -146,7 +178,6 @@ void FSEventWrap::OnEvent(uv_fs_event_t* handle, const char* filename,
     event_string = env->change_string();
   } else {
     CHECK(0 && "bad fs events flag");
-    ABORT();
   }
 
   Local<Value> argv[] = {
@@ -156,15 +187,30 @@ void FSEventWrap::OnEvent(uv_fs_event_t* handle, const char* filename,
   };
 
   if (filename != nullptr) {
-    argv[2] = OneByteString(env->isolate(), filename);
+    Local<Value> error;
+    MaybeLocal<Value> fn = StringBytes::Encode(env->isolate(),
+                                               filename,
+                                               wrap->encoding_,
+                                               &error);
+    if (fn.IsEmpty()) {
+      argv[0] = Integer::New(env->isolate(), UV_EINVAL);
+      argv[2] = StringBytes::Encode(env->isolate(),
+                                    filename,
+                                    strlen(filename),
+                                    BUFFER,
+                                    &error).ToLocalChecked();
+    } else {
+      argv[2] = fn.ToLocalChecked();
+    }
   }
 
-  wrap->MakeCallback(env->onchange_string(), ARRAY_SIZE(argv), argv);
+  wrap->MakeCallback(env->onchange_string(), arraysize(argv), argv);
 }
 
 
 void FSEventWrap::Close(const FunctionCallbackInfo<Value>& args) {
-  FSEventWrap* wrap = Unwrap<FSEventWrap>(args.Holder());
+  FSEventWrap* wrap;
+  ASSIGN_OR_RETURN_UNWRAP(&wrap, args.Holder());
 
   if (wrap == nullptr || wrap->initialized_ == false)
     return;
@@ -173,6 +219,7 @@ void FSEventWrap::Close(const FunctionCallbackInfo<Value>& args) {
   HandleWrap::Close(args);
 }
 
+}  // anonymous namespace
 }  // namespace node
 
-NODE_MODULE_CONTEXT_AWARE_BUILTIN(fs_event_wrap, node::FSEventWrap::Initialize)
+NODE_BUILTIN_MODULE_CONTEXT_AWARE(fs_event_wrap, node::FSEventWrap::Initialize)
