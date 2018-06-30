@@ -30,7 +30,7 @@ class InstructionTester : public HandleAndZoneScope {
         schedule(zone()),
         common(zone()),
         machine(zone()),
-        code(NULL) {}
+        code(nullptr) {}
 
   Graph graph;
   Schedule schedule;
@@ -83,7 +83,7 @@ class InstructionTester : public HandleAndZoneScope {
   }
 
   UnallocatedOperand Unallocated(int vreg) {
-    return UnallocatedOperand(UnallocatedOperand::ANY, vreg);
+    return UnallocatedOperand(UnallocatedOperand::REGISTER_OR_SLOT, vreg);
   }
 
   RpoNumber RpoFor(BasicBlock* block) {

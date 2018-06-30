@@ -1,7 +1,7 @@
 'use strict';
 
 const common = require('../../common');
-const test_error = require(`./build/${common.buildType}/binding`);
+const test_error = require(`./build/${common.buildType}/test_error`);
 const assert = require('assert');
 const theError = new Error('Some error');
 const theTypeError = new TypeError('Some type error');
@@ -59,6 +59,25 @@ assert.throws(() => {
 assert.throws(() => {
   test_error.throwTypeError();
 }, /^TypeError: type error$/);
+
+function testThrowArbitrary(value) {
+  assert.throws(
+    () => test_error.throwArbitrary(value),
+    (err) => {
+      assert.strictEqual(err, value);
+      return true;
+    });
+}
+
+testThrowArbitrary(42);
+testThrowArbitrary({});
+testThrowArbitrary([]);
+testThrowArbitrary(Symbol('xyzzy'));
+testThrowArbitrary(true);
+testThrowArbitrary('ball');
+testThrowArbitrary(undefined);
+testThrowArbitrary(null);
+testThrowArbitrary(NaN);
 
 common.expectsError(
   () => test_error.throwErrorCode(),

@@ -22,25 +22,23 @@
 'use strict';
 const common = require('../common');
 const assert = require('assert');
+const util = require('util');
 
 assert.ok(process.stdout.writable);
 assert.ok(process.stderr.writable);
 // Support legacy API
-assert.strictEqual(typeof process.stdout.fd, 'number');
-assert.strictEqual(typeof process.stderr.fd, 'number');
+if (common.isMainThread) {
+  assert.strictEqual(typeof process.stdout.fd, 'number');
+  assert.strictEqual(typeof process.stderr.fd, 'number');
+}
+process.once('warning', common.mustCall((warning) => {
+  assert(/no such label/.test(warning.message));
+}));
 
-assert.doesNotThrow(function() {
-  process.once('warning', common.mustCall((warning) => {
-    assert(/no such label/.test(warning.message));
-  }));
+console.timeEnd('no such label');
 
-  console.timeEnd('no such label');
-});
-
-assert.doesNotThrow(function() {
-  console.time('label');
-  console.timeEnd('label');
-});
+console.time('label');
+console.timeEnd('label');
 
 // Check that the `Error` is a `TypeError` but do not check the message as it
 // will be different in different JavaScript engines.
@@ -50,14 +48,16 @@ assert.throws(() => console.timeEnd(Symbol('test')),
               TypeError);
 
 
-// an Object with a custom .inspect() function
-const custom_inspect = { foo: 'bar', inspect: () => 'inspect' };
+// An Object with a custom inspect function.
+const custom_inspect = { foo: 'bar', [util.inspect.custom]: () => 'inspect' };
 
 const strings = [];
 const errStrings = [];
+process.stdout.isTTY = false;
 common.hijackStdout(function(data) {
   strings.push(data);
 });
+process.stderr.isTTY = false;
 common.hijackStderr(function(data) {
   errStrings.push(data);
 });
@@ -140,15 +140,25 @@ console.timeEnd();
 console.time(NaN);
 console.timeEnd(NaN);
 
-assert.doesNotThrow(() => {
-  console.assert(false, '%s should', 'console.assert', 'not throw');
-  assert.strictEqual(errStrings[errStrings.length - 1],
-                     'Assertion failed: console.assert should not throw\n');
-});
+// make sure calling time twice without timeEnd doesn't reset the timer.
+console.time('test');
+const time = console._times.get('test');
+setTimeout(() => {
+  common.expectWarning(
+    'Warning',
+    'Label \'test\' already exists for console.time()',
+    common.noWarnCode);
+  console.time('test');
+  assert.deepStrictEqual(console._times.get('test'), time);
+  console.timeEnd('test');
+}, 1);
 
-assert.doesNotThrow(() => {
-  console.assert(true, 'this should not throw');
-});
+
+console.assert(false, '%s should', 'console.assert', 'not throw');
+assert.strictEqual(errStrings[errStrings.length - 1],
+                   'Assertion failed: console.assert should not throw\n');
+
+console.assert(true, 'this should not throw');
 
 assert.strictEqual(strings.length, process.stdout.writeTimes);
 assert.strictEqual(errStrings.length, process.stderr.writeTimes);
@@ -184,9 +194,11 @@ for (const expected of expectedStrings) {
 }
 
 assert.strictEqual(strings.shift(),
-                   "{ foo: 'bar', inspect: [Function: inspect] }\n");
+                   "{ foo: 'bar',\n  [Symbol(util.inspect.custom)]: " +
+                    '[Function: [util.inspect.custom]] }\n');
 assert.strictEqual(strings.shift(),
-                   "{ foo: 'bar', inspect: [Function: inspect] }\n");
+                   "{ foo: 'bar',\n  [Symbol(util.inspect.custom)]: " +
+                    '[Function: [util.inspect.custom]] }\n');
 assert.ok(strings.shift().includes('foo: [Object]'));
 assert.strictEqual(strings.shift().includes('baz'), false);
 assert.strictEqual(strings.shift(), 'inspect inspect\n');

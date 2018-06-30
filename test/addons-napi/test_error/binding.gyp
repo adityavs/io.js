@@ -1,8 +1,8 @@
 {
   "targets": [
     {
-      "target_name": "binding",
-      "sources": [ "test_error.cc" ]
+      "target_name": "test_error",
+      "sources": [ "test_error.c" ]
     }
   ]
 }

@@ -81,6 +81,23 @@ Notes:
 - Version strings are listed below as _"vx.y.z"_. Substitute for the release
   version.
 
+### 0. Pre-release steps
+
+Before preparing a Node.js release, the Build Working Group must be notified at
+least one business day in advance of the expected release. Coordinating with
+Build is essential to make sure that the CI works, release files are published,
+and the release blog post is available on the project website.
+
+Build can be contacted best by opening up an issue on the [Build issue
+tracker][], and by posting in `#node-build` on [webchat.freenode.net][].
+
+When preparing a security release, contact Build at least two weekdays in
+advance of the expected release. To ensure that the security patch(es) can be
+properly tested, run a `node-test-pull-request` job against the `master` branch
+of the `nodejs-private/node-private` repository a day or so before the
+[CI lockdown procedure][] begins. This is to confirm that Jenkins can properly
+access the private repository.
+
 ### 1. Cherry-picking from `master` and other branches
 
 Create a new branch named _"vx.y.z-proposal"_, or something similar. Using `git
@@ -92,7 +109,7 @@ commit metadata, as well as the `semver-minor` and `semver-major` GitHub labels.
 One drawback is that when the `PR-URL` metadata is accidentally omitted from a
 commit, the commit will show up because it's unsure if it's a duplicate or not.
 
-For a list of commits that could be landed in a patch release on v5.x
+For a list of commits that could be landed in a patch release on v5.x:
 
 ```console
 $ branch-diff v5.x master --exclude-label=semver-major,semver-minor,dont-land-on-v5.x --filter-release --format=simple
@@ -148,7 +165,7 @@ Commits may need to be reverted or a major version bump may need to happen.
 #### Step 1: Collecting the formatted list of changes:
 
 Collect a formatted list of commits since the last release. Use
-[`changelog-maker`](https://github.com/rvagg/changelog-maker) to do this.
+[`changelog-maker`](https://github.com/rvagg/changelog-maker) to do this:
 
 ```console
 $ changelog-maker --group
@@ -216,7 +233,7 @@ doc/api/*.md`, and substitute this node version with `sed -i
 "s/REPLACEME/$VERSION/g" doc/api/*.md` or `perl -pi -e "s/REPLACEME/$VERSION/g"
 doc/api/*.md`.
 
-*Note*: `$VERSION` should be prefixed with a `v`
+*Note*: `$VERSION` should be prefixed with a `v`.
 
 If this release includes any new deprecations it is necessary to ensure that
 those are assigned a proper static deprecation code. These are listed in the
@@ -397,6 +414,9 @@ Cherry-pick the release commit to `master`. After cherry-picking, edit
 `src/node_version.h` to ensure the version macros contain whatever values were
 previously on `master`. `NODE_VERSION_IS_RELEASE` should be `0`.
 
+Run `make lint-md-build; make lint` before pushing to `master`, to make sure the
+Changelog formatting passes the lint rules on `master`.
+
 ### 12. Promote and Sign the Release Builds
 
 **It is important that the same individual who signed the release tag be the one
@@ -504,7 +524,8 @@ To announce the build on Twitter through the official @nodejs account, email
 
 To ensure communication goes out with the timing of the blog post, please allow
 24 hour prior notice. If known, please include the date and time the release
-will be shared with the community in the email to coordinate these announcements.
+will be shared with the community in the email to coordinate these
+announcements.
 
 ### 16. Cleanup
 
@@ -514,4 +535,7 @@ Close your release proposal PR and remove the proposal branch.
 
 _In whatever form you do this..._
 
+[CI lockdown procedure]: https://github.com/nodejs/build/blob/master/doc/jenkins-guide.md#restricting-access-for-security-releases
+[Build issue tracker]: https://github.com/nodejs/build/issues/new
 [nodejs.org release-post.js script]: https://github.com/nodejs/nodejs.org/blob/master/scripts/release-post.js
+[webchat.freenode.net]: https://webchat.freenode.net/

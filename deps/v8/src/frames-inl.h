@@ -41,7 +41,7 @@ inline StackHandler* StackFrame::top_handler() const {
 
 
 inline Address* StackFrame::ResolveReturnAddressLocation(Address* pc_address) {
-  if (return_address_location_resolver_ == NULL) {
+  if (return_address_location_resolver_ == nullptr) {
     return pc_address;
   } else {
     return reinterpret_cast<Address*>(
@@ -50,18 +50,22 @@ inline Address* StackFrame::ResolveReturnAddressLocation(Address* pc_address) {
   }
 }
 
+inline NativeFrame::NativeFrame(StackFrameIteratorBase* iterator)
+    : StackFrame(iterator) {}
+
+inline Address NativeFrame::GetCallerStackPointer() const {
+  return fp() + CommonFrameConstants::kCallerSPOffset;
+}
 
 inline EntryFrame::EntryFrame(StackFrameIteratorBase* iterator)
-    : StackFrame(iterator) {
-}
+    : StackFrame(iterator) {}
 
 inline ConstructEntryFrame::ConstructEntryFrame(
     StackFrameIteratorBase* iterator)
     : EntryFrame(iterator) {}
 
 inline ExitFrame::ExitFrame(StackFrameIteratorBase* iterator)
-    : StackFrame(iterator) {
-}
+    : StackFrame(iterator) {}
 
 inline BuiltinExitFrame::BuiltinExitFrame(StackFrameIteratorBase* iterator)
     : ExitFrame(iterator) {}
@@ -221,6 +225,11 @@ inline JavaScriptBuiltinContinuationFrame::JavaScriptBuiltinContinuationFrame(
     StackFrameIteratorBase* iterator)
     : JavaScriptFrame(iterator) {}
 
+inline JavaScriptBuiltinContinuationWithCatchFrame::
+    JavaScriptBuiltinContinuationWithCatchFrame(
+        StackFrameIteratorBase* iterator)
+    : JavaScriptBuiltinContinuationFrame(iterator) {}
+
 inline JavaScriptFrameIterator::JavaScriptFrameIterator(
     Isolate* isolate)
     : iterator_(isolate) {
@@ -263,7 +272,7 @@ JavaScriptFrame* StackTraceFrameIterator::javascript_frame() const {
 inline StackFrame* SafeStackFrameIterator::frame() const {
   DCHECK(!done());
   DCHECK(frame_->is_java_script() || frame_->is_exit() ||
-         frame_->is_builtin_exit());
+         frame_->is_builtin_exit() || frame_->is_wasm());
   return frame_;
 }
 

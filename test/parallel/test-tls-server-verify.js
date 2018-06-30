@@ -149,10 +149,6 @@ function runClient(prefix, port, options, cb) {
 
   const args = ['s_client', '-connect', `127.0.0.1:${port}`];
 
-  // for the performance issue in s_client on Windows
-  if (common.isWindows)
-    args.push('-no_rand_screen');
-
   console.log(`${prefix}  connecting with`, options.name);
 
   switch (options.name) {
@@ -227,12 +223,7 @@ function runClient(prefix, port, options, cb) {
     }
   });
 
-  //client.stdout.pipe(process.stdout);
-
   client.on('exit', function(code) {
-    //assert.strictEqual(
-    //  0, code,
-    //  `${prefix}${options.name}: s_client exited with error code ${code}`);
     if (options.shouldReject) {
       assert.strictEqual(
         true, rejected,
@@ -327,7 +318,7 @@ function runTest(port, testIndex) {
     } else {
       server.close();
       successfulTests++;
-      runTest(port, nextTest++);
+      runTest(0, nextTest++);
     }
   }
 
@@ -345,7 +336,7 @@ function runTest(port, testIndex) {
           if (clientsCompleted === tcase.clients.length) {
             server.close();
             successfulTests++;
-            runTest(port, nextTest++);
+            runTest(0, nextTest++);
           }
         });
       }
@@ -355,7 +346,6 @@ function runTest(port, testIndex) {
 
 
 let nextTest = 0;
-runTest(0, nextTest++);
 runTest(0, nextTest++);
 
 

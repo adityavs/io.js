@@ -20,10 +20,12 @@
 // USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 'use strict';
-require('../common');
+const common = require('../common');
+const tmpdir = require('../common/tmpdir');
+
 const assert = require('assert');
-const path = require('path');
 const fs = require('fs');
+const path = require('path');
 
 const backslash = /\\/g;
 
@@ -168,9 +170,10 @@ assert.strictEqual(require('../fixtures/foo').foo, 'ok',
 
 // Should not attempt to load a directory
 try {
-  require('../fixtures/empty');
+  tmpdir.refresh();
+  require(tmpdir.path);
 } catch (err) {
-  assert.strictEqual(err.message, 'Cannot find module \'../fixtures/empty\'');
+  assert.strictEqual(err.message, `Cannot find module '${tmpdir.path}'`);
 }
 
 {
@@ -189,7 +192,10 @@ try {
     require(`${loadOrder}file3`);
   } catch (e) {
     // Not a real .node module, but we know we require'd the right thing.
-    assert.ok(/file3\.node/.test(e.message.replace(backslash, '/')));
+    if (common.isOpenBSD) // OpenBSD errors with non-ELF object error
+      assert.ok(/File not an ELF object/.test(e.message.replace(backslash, '/')));
+    else
+      assert.ok(/file3\.node/.test(e.message.replace(backslash, '/')));
   }
   assert.strictEqual(require(`${loadOrder}file4`).file4, 'file4.reg', msg);
   assert.strictEqual(require(`${loadOrder}file5`).file5, 'file5.reg2', msg);
@@ -197,7 +203,10 @@ try {
   try {
     require(`${loadOrder}file7`);
   } catch (e) {
-    assert.ok(/file7\/index\.node/.test(e.message.replace(backslash, '/')));
+    if (common.isOpenBSD)
+      assert.ok(/File not an ELF object/.test(e.message.replace(backslash, '/')));
+    else
+      assert.ok(/file7\/index\.node/.test(e.message.replace(backslash, '/')));
   }
   assert.strictEqual(require(`${loadOrder}file8`).file8, 'file8/index.reg',
                      msg);
@@ -242,7 +251,8 @@ try {
 
   assert.deepStrictEqual(children, {
     'common/index.js': {
-      'common/fixtures.js': {}
+      'common/fixtures.js': {},
+      'common/tmpdir.js': {}
     },
     'fixtures/not-main-module.js': {},
     'fixtures/a.js': {
@@ -277,7 +287,6 @@ try {
     'fixtures/registerExt.test': {},
     'fixtures/registerExt.hello.world': {},
     'fixtures/registerExt2.test': {},
-    'fixtures/empty.js': {},
     'fixtures/module-load-order/file1': {},
     'fixtures/module-load-order/file2.js': {},
     'fixtures/module-load-order/file3.node': {},
@@ -296,17 +305,6 @@ try {
   });
 }
 
-
-// require() must take string, and must be truthy
-assert.throws(function() {
-  console.error('require non-string');
-  require({ foo: 'bar' });
-}, /path must be a string/);
-
-assert.throws(function() {
-  console.error('require empty string');
-  require('');
-}, /missing path/);
 
 process.on('exit', function() {
   assert.ok(a.A instanceof Function);

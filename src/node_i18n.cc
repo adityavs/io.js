@@ -46,6 +46,7 @@
 
 #include "node.h"
 #include "node_buffer.h"
+#include "node_errors.h"
 #include "env-inl.h"
 #include "util-inl.h"
 #include "base_object-inl.h"
@@ -126,7 +127,7 @@ struct Converter {
 
   explicit Converter(UConverter* converter,
                      const char* sub = nullptr) : conv(converter) {
-    CHECK_NE(conv, nullptr);
+    CHECK_NOT_NULL(conv);
     UErrorCode status = U_ZERO_ERROR;
     if (sub != nullptr) {
       ucnv_setSubstChars(conv, sub, strlen(sub), &status);
@@ -258,7 +259,7 @@ class ConverterObject : public BaseObject, Converter {
                   BaseObject(env, wrap),
                   Converter(converter, sub),
                   ignoreBOM_(ignoreBOM) {
-    MakeWeak<ConverterObject>(this);
+    MakeWeak();
 
     switch (ucnv_getType(converter)) {
       case UCNV_UTF8:
@@ -447,7 +448,7 @@ void Transcode(const FunctionCallbackInfo<Value>&args) {
   UErrorCode status = U_ZERO_ERROR;
   MaybeLocal<Object> result;
 
-  THROW_AND_RETURN_UNLESS_BUFFER(env, args[0]);
+  CHECK(Buffer::HasInstance(args[0]));
   SPREAD_BUFFER_ARG(args[0], ts_obj);
   const enum encoding fromEncoding = ParseEncoding(isolate, args[1], BUFFER);
   const enum encoding toEncoding = ParseEncoding(isolate, args[2], BUFFER);
@@ -523,7 +524,7 @@ const char* GetVersion(const char* type,
   } else if (!strcmp(type, TYPE_UNICODE)) {
     return U_UNICODE_VERSION;
   } else if (!strcmp(type, TYPE_TZ)) {
-    return TimeZone::getTZDataVersion(*status);
+    return icu::TimeZone::getTZDataVersion(*status);
   } else if (!strcmp(type, TYPE_CLDR)) {
     UVersionInfo versionArray;
     ulocdata_getCLDRVersion(versionArray, status);
@@ -852,10 +853,10 @@ static void GetStringWidth(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(width);
 }
 
-void Init(Local<Object> target,
-          Local<Value> unused,
-          Local<Context> context,
-          void* priv) {
+void Initialize(Local<Object> target,
+                Local<Value> unused,
+                Local<Context> context,
+                void* priv) {
   Environment* env = Environment::GetCurrent(context);
   env->SetMethod(target, "toUnicode", ToUnicode);
   env->SetMethod(target, "toASCII", ToASCII);
@@ -875,6 +876,6 @@ void Init(Local<Object> target,
 }  // namespace i18n
 }  // namespace node
 
-NODE_BUILTIN_MODULE_CONTEXT_AWARE(icu, node::i18n::Init)
+NODE_BUILTIN_MODULE_CONTEXT_AWARE(icu, node::i18n::Initialize)
 
 #endif  // NODE_HAVE_I18N_SUPPORT

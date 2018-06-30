@@ -5,6 +5,7 @@
 #include "src/profiler/allocation-tracker.h"
 
 #include "src/frames-inl.h"
+#include "src/global-handles.h"
 #include "src/objects-inl.h"
 #include "src/profiler/heap-snapshot-generator-inl.h"
 
@@ -31,14 +32,14 @@ AllocationTraceNode* AllocationTraceNode::FindChild(
   for (AllocationTraceNode* node : children_) {
     if (node->function_info_index() == function_info_index) return node;
   }
-  return NULL;
+  return nullptr;
 }
 
 
 AllocationTraceNode* AllocationTraceNode::FindOrAddChild(
     unsigned function_info_index) {
   AllocationTraceNode* child = FindChild(function_info_index);
-  if (child == NULL) {
+  if (child == nullptr) {
     child = new AllocationTraceNode(tree_, function_info_index);
     children_.push_back(child);
   }
@@ -54,7 +55,7 @@ void AllocationTraceNode::AddAllocation(unsigned size) {
 
 void AllocationTraceNode::Print(int indent, AllocationTracker* tracker) {
   base::OS::Print("%10u %10u %*c", total_size_, allocation_count_, indent, ' ');
-  if (tracker != NULL) {
+  if (tracker != nullptr) {
     AllocationTracker::FunctionInfo* info =
         tracker->function_info_list()[function_info_index_];
     base::OS::Print("%s #%u", info->name, id_);
@@ -246,7 +247,7 @@ unsigned AllocationTracker::AddFunctionInfo(SharedFunctionInfo* shared,
                                             SnapshotObjectId id) {
   base::HashMap::Entry* entry = id_to_function_info_index_.LookupOrInsert(
       reinterpret_cast<void*>(id), SnapshotObjectIdHash(id));
-  if (entry->value == NULL) {
+  if (entry->value == nullptr) {
     FunctionInfo* info = new FunctionInfo();
     info->name = names_->GetFunctionName(shared->DebugName());
     info->function_id = id;
@@ -260,7 +261,7 @@ unsigned AllocationTracker::AddFunctionInfo(SharedFunctionInfo* shared,
       // Converting start offset into line and column may cause heap
       // allocations so we postpone them until snapshot serialization.
       unresolved_locations_.push_back(
-          new UnresolvedLocation(script, shared->start_position(), info));
+          new UnresolvedLocation(script, shared->StartPosition(), info));
     }
     entry->value = reinterpret_cast<void*>(function_info_list_.size());
     function_info_list_.push_back(info);

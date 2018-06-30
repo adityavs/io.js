@@ -159,6 +159,7 @@ class V8_EXPORT_PRIVATE LoadElimination final
       for (auto this_it : this->info_for_node_) {
         Node* this_object = this_it.first;
         Field this_second = this_it.second;
+        if (this_object->IsDead()) continue;
         auto that_it = that->info_for_node_.find(this_object);
         if (that_it != that->info_for_node_.end() &&
             that_it->second == this_second) {
@@ -192,11 +193,8 @@ class V8_EXPORT_PRIVATE LoadElimination final
   // effect paths through the graph.
   class AbstractMaps final : public ZoneObject {
    public:
-    explicit AbstractMaps(Zone* zone) : info_for_node_(zone) {}
-    AbstractMaps(Node* object, ZoneHandleSet<Map> maps, Zone* zone)
-        : info_for_node_(zone) {
-      info_for_node_.insert(std::make_pair(object, maps));
-    }
+    explicit AbstractMaps(Zone* zone);
+    AbstractMaps(Node* object, ZoneHandleSet<Map> maps, Zone* zone);
 
     AbstractMaps const* Extend(Node* object, ZoneHandleSet<Map> maps,
                                Zone* zone) const;
@@ -225,7 +223,7 @@ class V8_EXPORT_PRIVATE LoadElimination final
     bool Equals(AbstractState const* that) const;
     void Merge(AbstractState const* that, Zone* zone);
 
-    AbstractState const* AddMaps(Node* object, ZoneHandleSet<Map> maps,
+    AbstractState const* SetMaps(Node* object, ZoneHandleSet<Map> maps,
                                  Zone* zone) const;
     AbstractState const* KillMaps(Node* object, Zone* zone) const;
     AbstractState const* KillMaps(const AliasStateInfo& alias_info,

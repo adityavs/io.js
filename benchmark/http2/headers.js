@@ -7,11 +7,9 @@ const bench = common.createBenchmark(main, {
   n: [1e3],
   nheaders: [0, 10, 100, 1000],
   benchmarker: ['h2load']
-}, { flags: ['--no-warnings', '--expose-http2'] });
+}, { flags: ['--no-warnings'] });
 
-function main(conf) {
-  const n = +conf.n;
-  const nheaders = +conf.nheaders;
+function main({ n, nheaders }) {
   const http2 = require('http2');
   const server = http2.createServer({
     maxHeaderListPairs: 20000

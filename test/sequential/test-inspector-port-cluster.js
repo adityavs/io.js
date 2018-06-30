@@ -24,6 +24,16 @@ function testRunnerMain() {
     workers: [{ expectedPort: 9230 }]
   });
 
+  spawnMaster({
+    execArgv: ['--inspect=65534'],
+    workers: [
+      { expectedPort: 65535 },
+      { expectedPort: 1024 },
+      { expectedPort: 1025 },
+      { expectedPort: 1026 }
+    ]
+  });
+
   let port = debuggerPort + offset++ * 5;
 
   spawnMaster({
@@ -197,6 +207,7 @@ function testRunnerMain() {
 function masterProcessMain() {
   const workers = JSON.parse(process.env.workers);
   const clusterSettings = JSON.parse(process.env.clusterSettings);
+  const badPortError = { type: RangeError, code: 'ERR_SOCKET_BAD_PORT' };
   let debugPort = process.debugPort;
 
   for (const worker of workers) {
@@ -224,36 +235,36 @@ function masterProcessMain() {
         clusterSettings.inspectPort = 'string';
         cluster.setupMaster(clusterSettings);
 
-        assert.throws(() => {
+        common.expectsError(() => {
           cluster.fork(params).on('exit', common.mustCall(checkExitCode));
-        }, TypeError);
+        }, badPortError);
 
         return;
       } else if (clusterSettings.inspectPort === 'null') {
         clusterSettings.inspectPort = null;
         cluster.setupMaster(clusterSettings);
 
-        assert.throws(() => {
+        common.expectsError(() => {
           cluster.fork(params).on('exit', common.mustCall(checkExitCode));
-        }, TypeError);
+        }, badPortError);
 
         return;
       } else if (clusterSettings.inspectPort === 'bignumber') {
         clusterSettings.inspectPort = 1293812;
         cluster.setupMaster(clusterSettings);
 
-        assert.throws(() => {
+        common.expectsError(() => {
           cluster.fork(params).on('exit', common.mustCall(checkExitCode));
-        }, TypeError);
+        }, badPortError);
 
         return;
       } else if (clusterSettings.inspectPort === 'negativenumber') {
         clusterSettings.inspectPort = -9776;
         cluster.setupMaster(clusterSettings);
 
-        assert.throws(() => {
+        common.expectsError(() => {
           cluster.fork(params).on('exit', common.mustCall(checkExitCode));
-        }, TypeError);
+        }, badPortError);
 
         return;
       } else if (clusterSettings.inspectPort === 'bignumberfunc') {
@@ -264,9 +275,9 @@ function masterProcessMain() {
 
         cluster.setupMaster(clusterSettings);
 
-        assert.throws(() => {
+        common.expectsError(() => {
           cluster.fork(params).on('exit', common.mustCall(checkExitCode));
-        }, TypeError);
+        }, badPortError);
 
         return;
       } else if (clusterSettings.inspectPort === 'strfunc') {
@@ -277,9 +288,9 @@ function masterProcessMain() {
 
         cluster.setupMaster(clusterSettings);
 
-        assert.throws(() => {
+        common.expectsError(() => {
           cluster.fork(params).on('exit', common.mustCall(checkExitCode));
-        }, TypeError);
+        }, badPortError);
 
         return;
       }

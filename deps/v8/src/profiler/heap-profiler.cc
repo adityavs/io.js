@@ -17,37 +17,32 @@ namespace internal {
 HeapProfiler::HeapProfiler(Heap* heap)
     : ids_(new HeapObjectsMap(heap)),
       names_(new StringsStorage(heap)),
-      is_tracking_object_moves_(false),
-      get_retainer_infos_callback_(nullptr) {}
+      is_tracking_object_moves_(false) {}
 
-static void DeleteHeapSnapshot(HeapSnapshot* snapshot_ptr) {
-  delete snapshot_ptr;
-}
-
-
-HeapProfiler::~HeapProfiler() {
-  std::for_each(snapshots_.begin(), snapshots_.end(), &DeleteHeapSnapshot);
-}
-
+HeapProfiler::~HeapProfiler() = default;
 
 void HeapProfiler::DeleteAllSnapshots() {
-  std::for_each(snapshots_.begin(), snapshots_.end(), &DeleteHeapSnapshot);
   snapshots_.clear();
   names_.reset(new StringsStorage(heap()));
 }
 
 
 void HeapProfiler::RemoveSnapshot(HeapSnapshot* snapshot) {
-  snapshots_.erase(std::find(snapshots_.begin(), snapshots_.end(), snapshot));
+  snapshots_.erase(
+      std::find_if(snapshots_.begin(), snapshots_.end(),
+                   [&](const std::unique_ptr<HeapSnapshot>& entry) {
+                     return entry.get() == snapshot;
+                   }));
 }
 
 
 void HeapProfiler::DefineWrapperClass(
     uint16_t class_id, v8::HeapProfiler::WrapperInfoCallback callback) {
-  DCHECK(class_id != v8::HeapProfiler::kPersistentHandleNoClassId);
+  DCHECK_NE(class_id, v8::HeapProfiler::kPersistentHandleNoClassId);
   if (wrapper_callbacks_.size() <= class_id) {
     wrapper_callbacks_.insert(wrapper_callbacks_.end(),
-                              class_id - wrapper_callbacks_.size() + 1, NULL);
+                              class_id - wrapper_callbacks_.size() + 1,
+                              nullptr);
   }
   wrapper_callbacks_[class_id] = callback;
 }
@@ -55,7 +50,7 @@ void HeapProfiler::DefineWrapperClass(
 
 v8::RetainedObjectInfo* HeapProfiler::ExecuteWrapperClassCallback(
     uint16_t class_id, Object** wrapper) {
-  if (wrapper_callbacks_.size() <= class_id) return NULL;
+  if (wrapper_callbacks_.size() <= class_id) return nullptr;
   return wrapper_callbacks_[class_id](
       class_id, Utils::ToLocal(Handle<Object>(wrapper)));
 }
@@ -74,6 +69,18 @@ v8::HeapProfiler::RetainerInfos HeapProfiler::GetRetainerInfos(
   return infos;
 }
 
+void HeapProfiler::SetBuildEmbedderGraphCallback(
+    v8::HeapProfiler::BuildEmbedderGraphCallback callback) {
+  build_embedder_graph_callback_ = callback;
+}
+
+void HeapProfiler::BuildEmbedderGraph(Isolate* isolate,
+                                      v8::EmbedderGraph* graph) {
+  if (build_embedder_graph_callback_ != nullptr)
+    build_embedder_graph_callback_(reinterpret_cast<v8::Isolate*>(isolate),
+                                   graph);
+}
+
 HeapSnapshot* HeapProfiler::TakeSnapshot(
     v8::ActivityControl* control,
     v8::HeapProfiler::ObjectNameResolver* resolver) {
@@ -82,9 +89,9 @@ HeapSnapshot* HeapProfiler::TakeSnapshot(
     HeapSnapshotGenerator generator(result, control, resolver, heap());
     if (!generator.GenerateSnapshot()) {
       delete result;
-      result = NULL;
+      result = nullptr;
     } else {
-      snapshots_.push_back(result);
+      snapshots_.emplace_back(result);
     }
   }
   ids_->RemoveDeadEntries();
@@ -125,10 +132,10 @@ v8::AllocationProfile* HeapProfiler::GetAllocationProfile() {
 void HeapProfiler::StartHeapObjectsTracking(bool track_allocations) {
   ids_->UpdateHeapObjectsMap();
   is_tracking_object_moves_ = true;
-  DCHECK(!is_tracking_allocations());
+  DCHECK(!allocation_tracker_);
   if (track_allocations) {
     allocation_tracker_.reset(new AllocationTracker(ids_.get(), names_.get()));
-    heap()->DisableInlineAllocation();
+    heap()->AddHeapObjectAllocationTracker(this);
     heap()->isolate()->debug()->feature_tracker()->Track(
         DebugFeatureTracker::kAllocationTracking);
   }
@@ -141,9 +148,9 @@ SnapshotObjectId HeapProfiler::PushHeapObjectsStats(OutputStream* stream,
 
 void HeapProfiler::StopHeapObjectsTracking() {
   ids_->StopHeapObjectsTracking();
-  if (is_tracking_allocations()) {
+  if (allocation_tracker_) {
     allocation_tracker_.reset();
-    heap()->EnableInlineAllocation();
+    heap()->RemoveHeapObjectAllocationTracker(this);
   }
 }
 
@@ -152,7 +159,7 @@ int HeapProfiler::GetSnapshotsCount() {
 }
 
 HeapSnapshot* HeapProfiler::GetSnapshot(int index) {
-  return snapshots_.at(index);
+  return snapshots_.at(index).get();
 }
 
 SnapshotObjectId HeapProfiler::GetSnapshotObjectId(Handle<Object> obj) {
@@ -182,25 +189,24 @@ void HeapProfiler::UpdateObjectSizeEvent(Address addr, int size) {
 }
 
 Handle<HeapObject> HeapProfiler::FindHeapObjectById(SnapshotObjectId id) {
-  HeapObject* object = NULL;
+  HeapObject* object = nullptr;
   HeapIterator iterator(heap(), HeapIterator::kFilterUnreachable);
   // Make sure that object with the given id is still reachable.
-  for (HeapObject* obj = iterator.next();
-       obj != NULL;
+  for (HeapObject* obj = iterator.next(); obj != nullptr;
        obj = iterator.next()) {
     if (ids_->FindEntry(obj->address()) == id) {
-      DCHECK(object == NULL);
+      DCHECK_NULL(object);
       object = obj;
       // Can't break -- kFilterUnreachable requires full heap traversal.
     }
   }
-  return object != NULL ? Handle<HeapObject>(object) : Handle<HeapObject>();
+  return object != nullptr ? Handle<HeapObject>(object) : Handle<HeapObject>();
 }
 
 
 void HeapProfiler::ClearHeapObjectMap() {
   ids_.reset(new HeapObjectsMap(heap()));
-  if (!is_tracking_allocations()) is_tracking_object_moves_ = false;
+  if (!allocation_tracker_) is_tracking_object_moves_ = false;
 }
 
 

@@ -14,9 +14,12 @@
 namespace v8 {
 namespace internal {
 
+class FrameInspector;
+
 class DebugEvaluate : public AllStatic {
  public:
-  static MaybeHandle<Object> Global(Isolate* isolate, Handle<String> source);
+  static MaybeHandle<Object> Global(Isolate* isolate, Handle<String> source,
+                                    bool throw_on_side_effect);
 
   // Evaluate a piece of JavaScript in the context of a stack frame for
   // debugging.  Things that need special attention are:
@@ -28,8 +31,21 @@ class DebugEvaluate : public AllStatic {
                                    Handle<String> source,
                                    bool throw_on_side_effect);
 
-  static bool FunctionHasNoSideEffect(Handle<SharedFunctionInfo> info);
-  static bool CallbackHasNoSideEffect(Address function_addr);
+  // This is used for break-at-entry for builtins and API functions.
+  // Evaluate a piece of JavaScript in the native context, but with the
+  // materialized arguments object and receiver of the current call.
+  static MaybeHandle<Object> WithTopmostArguments(Isolate* isolate,
+                                                  Handle<String> source);
+
+  enum SideEffectState {
+    kHasSideEffects,
+    kRequiresRuntimeChecks,
+    kHasNoSideEffect
+  };
+  static SideEffectState FunctionGetSideEffectState(
+      Handle<SharedFunctionInfo> info);
+  static bool CallbackHasNoSideEffect(Object* callback_info);
+  static void ApplySideEffectChecks(Handle<BytecodeArray> bytecode_array);
 
  private:
   // This class builds a context chain for evaluation of expressions
@@ -72,6 +88,10 @@ class DebugEvaluate : public AllStatic {
                              Handle<Context> local_context,
                              Handle<JSFunction> local_function,
                              Handle<StringSet> non_locals);
+
+    void MaterializeStackLocals(Handle<JSObject> target,
+                                Handle<JSFunction> function,
+                                FrameInspector* frame_inspector);
 
     Handle<SharedFunctionInfo> outer_info_;
     Handle<Context> evaluation_context_;

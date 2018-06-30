@@ -11,8 +11,6 @@
 // -------------------------------------------------------------------
 // Imports
 
-var GetIterator;
-var GetMethod;
 var GlobalArray = global.Array;
 var InternalArray = utils.InternalArray;
 var MathMax = global.Math.max;
@@ -22,13 +20,15 @@ var ObjectToString = global.Object.prototype.toString;
 var iteratorSymbol = utils.ImportNow("iterator_symbol");
 var unscopablesSymbol = utils.ImportNow("unscopables_symbol");
 
-utils.Import(function(from) {
-  GetIterator = from.GetIterator;
-  GetMethod = from.GetMethod;
-});
-
 // -------------------------------------------------------------------
 
+macro IS_PROXY(arg)
+(%_IsJSProxy(arg))
+endmacro
+
+macro INVERT_NEG_ZERO(arg)
+((arg) + 0)
+endmacro
 
 function ArraySpeciesCreate(array, length) {
   length = INVERT_NEG_ZERO(length);
@@ -383,8 +383,6 @@ function InnerArrayJoin(separator, array, length) {
 DEFINE_METHOD(
   GlobalArray.prototype,
   join(separator) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.join");
-
     var array = TO_OBJECT(this);
     var length = TO_LENGTH(array.length);
 
@@ -396,8 +394,6 @@ DEFINE_METHOD(
 // Removes the last element from the array and returns it. See
 // ECMA-262, section 15.4.4.6.
 function ArrayPopFallback() {
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.pop");
-
   var array = TO_OBJECT(this);
   var n = TO_LENGTH(array.length);
   if (n == 0) {
@@ -416,8 +412,6 @@ function ArrayPopFallback() {
 // Appends the arguments to the end of the array and returns the new
 // length of the array. See ECMA-262, section 15.4.4.7.
 function ArrayPushFallback() {
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.push");
-
   var array = TO_OBJECT(this);
   var n = TO_LENGTH(array.length);
   var m = arguments.length;
@@ -520,8 +514,6 @@ function GenericArrayReverse(array, len) {
 DEFINE_METHOD(
   GlobalArray.prototype,
   reverse() {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.reverse");
-
     var array = TO_OBJECT(this);
     var len = TO_LENGTH(array.length);
     var isArray = IS_ARRAY(array);
@@ -540,8 +532,6 @@ DEFINE_METHOD(
 
 
 function ArrayShiftFallback() {
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.shift");
-
   var array = TO_OBJECT(this);
   var len = TO_LENGTH(array.length);
 
@@ -567,8 +557,6 @@ function ArrayShiftFallback() {
 
 
 function ArrayUnshiftFallback(arg1) {  // length == 1
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.unshift");
-
   var array = TO_OBJECT(this);
   var len = TO_LENGTH(array.length);
   var num_arguments = arguments.length;
@@ -590,47 +578,13 @@ function ArrayUnshiftFallback(arg1) {  // length == 1
 }
 
 
+// Oh the humanity... don't remove the following function because js2c for some
+// reason gets symbol minifiation wrong if it's not there. Instead of spending
+// the time fixing js2c (which will go away when all of the internal .js runtime
+// files are gone), just keep this work-around.
 function ArraySliceFallback(start, end) {
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.slice");
-
-  var array = TO_OBJECT(this);
-  var len = TO_LENGTH(array.length);
-  var start_i = TO_INTEGER(start);
-  var end_i = len;
-
-  if (!IS_UNDEFINED(end)) end_i = TO_INTEGER(end);
-
-  if (start_i < 0) {
-    start_i += len;
-    if (start_i < 0) start_i = 0;
-  } else {
-    if (start_i > len) start_i = len;
-  }
-
-  if (end_i < 0) {
-    end_i += len;
-    if (end_i < 0) end_i = 0;
-  } else {
-    if (end_i > len) end_i = len;
-  }
-
-  var result = ArraySpeciesCreate(array, MathMax(end_i - start_i, 0));
-
-  if (end_i < start_i) return result;
-
-  if (UseSparseVariant(array, len, IS_ARRAY(array), end_i - start_i)) {
-    %NormalizeElements(array);
-    if (IS_ARRAY(result)) %NormalizeElements(result);
-    SparseSlice(array, start_i, end_i - start_i, len, result);
-  } else {
-    SimpleSlice(array, start_i, end_i - start_i, len, result);
-  }
-
-  result.length = end_i - start_i;
-
-  return result;
+  return null;
 }
-
 
 function ComputeSpliceStartIndex(start_i, len) {
   if (start_i < 0) {
@@ -664,8 +618,6 @@ function ComputeSpliceDeleteCount(delete_count, num_arguments, len, start_i) {
 
 
 function ArraySpliceFallback(start, delete_count) {
-  CHECK_OBJECT_COERCIBLE(this, "Array.prototype.splice");
-
   var num_arguments = arguments.length;
   var array = TO_OBJECT(this);
   var len = TO_LENGTH(array.length);
@@ -1003,8 +955,6 @@ function InnerArraySort(array, length, comparefn) {
 DEFINE_METHOD(
   GlobalArray.prototype,
   sort(comparefn) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.sort");
-
     if (!IS_UNDEFINED(comparefn) && !IS_CALLABLE(comparefn)) {
       throw %make_type_error(kBadSortComparisonFunction, comparefn);
     }
@@ -1018,9 +968,7 @@ DEFINE_METHOD(
 DEFINE_METHOD_LEN(
   GlobalArray.prototype,
   lastIndexOf(element, index) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.lastIndexOf");
-
-    var array = this;
+    var array = TO_OBJECT(this);
     var length = TO_LENGTH(this.length);
 
     if (length == 0) return -1;
@@ -1079,8 +1027,6 @@ DEFINE_METHOD_LEN(
 DEFINE_METHOD_LEN(
   GlobalArray.prototype,
   copyWithin(target, start, end) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.copyWithin");
-
     var array = TO_OBJECT(this);
     var length = TO_LENGTH(array.length);
 
@@ -1133,74 +1079,10 @@ DEFINE_METHOD_LEN(
 );
 
 
-function InnerArrayFind(predicate, thisArg, array, length) {
-  if (!IS_CALLABLE(predicate)) {
-    throw %make_type_error(kCalledNonCallable, predicate);
-  }
-
-  for (var i = 0; i < length; i++) {
-    var element = array[i];
-    if (%_Call(predicate, thisArg, element, i, array)) {
-      return element;
-    }
-  }
-
-  return;
-}
-
-
-// ES6 draft 07-15-13, section 15.4.3.23
-DEFINE_METHOD_LEN(
-  GlobalArray.prototype,
-  find(predicate, thisArg) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.find");
-
-    var array = TO_OBJECT(this);
-    var length = TO_INTEGER(array.length);
-
-    return InnerArrayFind(predicate, thisArg, array, length);
-  },
-  1  /* Set function length */
-);
-
-
-function InnerArrayFindIndex(predicate, thisArg, array, length) {
-  if (!IS_CALLABLE(predicate)) {
-    throw %make_type_error(kCalledNonCallable, predicate);
-  }
-
-  for (var i = 0; i < length; i++) {
-    var element = array[i];
-    if (%_Call(predicate, thisArg, element, i, array)) {
-      return i;
-    }
-  }
-
-  return -1;
-}
-
-
-// ES6 draft 07-15-13, section 15.4.3.24
-DEFINE_METHOD_LEN(
-  GlobalArray.prototype,
-  findIndex(predicate, thisArg) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.findIndex");
-
-    var array = TO_OBJECT(this);
-    var length = TO_INTEGER(array.length);
-
-    return InnerArrayFindIndex(predicate, thisArg, array, length);
-  },
-  1  /* Set function length */
-);
-
-
 // ES6, draft 04-05-14, section 22.1.3.6
 DEFINE_METHOD_LEN(
   GlobalArray.prototype,
   fill(value, start, end) {
-    CHECK_OBJECT_COERCIBLE(this, "Array.prototype.fill");
-
     var array = TO_OBJECT(this);
     var length = TO_LENGTH(array.length);
 
@@ -1231,81 +1113,6 @@ DEFINE_METHOD_LEN(
   },
   1  /* Set function length */
 );
-
-
-// ES6, draft 10-14-14, section 22.1.2.1
-DEFINE_METHOD_LEN(
-  GlobalArray,
-  'from'(arrayLike, mapfn, receiver) {
-    var items = TO_OBJECT(arrayLike);
-    var mapping = !IS_UNDEFINED(mapfn);
-
-    if (mapping) {
-      if (!IS_CALLABLE(mapfn)) {
-        throw %make_type_error(kCalledNonCallable, mapfn);
-      }
-    }
-
-    var iterable = GetMethod(items, iteratorSymbol);
-    var k;
-    var result;
-    var mappedValue;
-    var nextValue;
-
-    if (!IS_UNDEFINED(iterable)) {
-      result = %IsConstructor(this) ? new this() : [];
-      k = 0;
-
-      for (nextValue of
-           { [iteratorSymbol]() { return GetIterator(items, iterable) } }) {
-        if (mapping) {
-          mappedValue = %_Call(mapfn, receiver, nextValue, k);
-        } else {
-          mappedValue = nextValue;
-        }
-        %CreateDataProperty(result, k, mappedValue);
-        k++;
-      }
-      result.length = k;
-      return result;
-    } else {
-      var len = TO_LENGTH(items.length);
-      result = %IsConstructor(this) ? new this(len) : new GlobalArray(len);
-
-      for (k = 0; k < len; ++k) {
-        nextValue = items[k];
-        if (mapping) {
-          mappedValue = %_Call(mapfn, receiver, nextValue, k);
-        } else {
-          mappedValue = nextValue;
-        }
-        %CreateDataProperty(result, k, mappedValue);
-      }
-
-      result.length = k;
-      return result;
-    }
-  },
-  1  /* Set function length. */
-);
-
-// ES6, draft 05-22-14, section 22.1.2.3
-DEFINE_METHOD(
-  GlobalArray,
-  of(...args) {
-    var length = args.length;
-    var constructor = this;
-    // TODO: Implement IsConstructor (ES6 section 7.2.5)
-    var array = %IsConstructor(constructor) ? new constructor(length) : [];
-    for (var i = 0; i < length; i++) {
-      %CreateDataProperty(array, i, args[i]);
-    }
-    array.length = length;
-    return array;
-  }
-);
-
-// -------------------------------------------------------------------
 
 // Set up unscopable properties on the Array.prototype object.
 var unscopables = {
@@ -1375,8 +1182,6 @@ utils.Export(function(to) {
   to.ArrayPush = ArrayPush;
   to.ArrayToString = ArrayToString;
   to.ArrayValues = ArrayValues;
-  to.InnerArrayFind = InnerArrayFind;
-  to.InnerArrayFindIndex = InnerArrayFindIndex;
   to.InnerArrayJoin = InnerArrayJoin;
   to.InnerArraySort = InnerArraySort;
   to.InnerArrayToLocaleString = InnerArrayToLocaleString;
@@ -1392,7 +1197,6 @@ utils.Export(function(to) {
   "array_push", ArrayPushFallback,
   "array_shift", ArrayShiftFallback,
   "array_splice", ArraySpliceFallback,
-  "array_slice", ArraySliceFallback,
   "array_unshift", ArrayUnshiftFallback,
 ]);
 

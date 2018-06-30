@@ -1,5 +1,8 @@
-@// NB(chrisdickinson): if you move this file, be sure to update tools/doc/html.js to
-@// point at the new location.
+@// NB(chrisdickinson): if you move this file, be sure to update
+@// tools/doc/html.js to point at the new location.
+
+<!--introduced_in=v0.10.0-->
+
 * [About these Docs](documentation.html)
 * [Usage & Example](synopsis.html)
 
@@ -43,13 +46,14 @@
 * [String Decoder](string_decoder.html)
 * [Timers](timers.html)
 * [TLS/SSL](tls.html)
-* [Tracing](tracing.html)
+* [Trace Events](tracing.html)
 * [TTY](tty.html)
 * [UDP/Datagram](dgram.html)
 * [URL](url.html)
 * [Utilities](util.html)
 * [V8](v8.html)
 * [VM](vm.html)
+* [Worker Threads](worker_threads.html)
 * [ZLIB](zlib.html)
 
 <div class="line"></div>

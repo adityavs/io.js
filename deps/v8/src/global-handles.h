@@ -77,6 +77,8 @@ class GlobalHandles {
 
   static void MakeWeak(Object*** location_addr);
 
+  static void AnnotateStrongRetainer(Object** location, const char* label);
+
   void RecordStats(HeapStats* stats);
 
   // Returns the current number of handles to global objects.
@@ -113,10 +115,10 @@ class GlobalHandles {
   int PostGarbageCollectionProcessing(
       GarbageCollector collector, const v8::GCCallbackFlags gc_callback_flags);
 
-  // Iterates over all strong handles.
   void IterateStrongRoots(RootVisitor* v);
 
-  // Iterates over all handles.
+  void IterateWeakRoots(RootVisitor* v);
+
   void IterateAllRoots(RootVisitor* v);
 
   void IterateAllNewSpaceRoots(RootVisitor* v);
@@ -154,14 +156,15 @@ class GlobalHandles {
   void IterateNewSpaceStrongAndDependentRootsAndIdentifyUnmodified(
       RootVisitor* v, size_t start, size_t end);
 
-  // Finds weak independent or unmodified handles satisfying
-  // the callback predicate and marks them as pending. See the note above.
+  // Marks weak unmodified handles satisfying |is_dead| as pending.
   void MarkNewSpaceWeakUnmodifiedObjectsPending(
-      WeakSlotCallbackWithHeap is_unscavenged);
+      WeakSlotCallbackWithHeap is_dead);
 
   // Iterates over weak independent or unmodified handles.
   // See the note above.
-  void IterateNewSpaceWeakUnmodifiedRoots(RootVisitor* v);
+  void IterateNewSpaceWeakUnmodifiedRootsForFinalizers(RootVisitor* v);
+  void IterateNewSpaceWeakUnmodifiedRootsForPhantomHandles(
+      RootVisitor* v, WeakSlotCallbackWithHeap should_reset_handle);
 
   // Identify unmodified objects that are in weak state and marks them
   // unmodified

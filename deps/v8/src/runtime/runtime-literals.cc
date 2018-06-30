@@ -41,10 +41,11 @@ class JSObjectWalkVisitor {
   JSObjectWalkVisitor(ContextObject* site_context, DeepCopyHints hints)
       : site_context_(site_context), hints_(hints) {}
 
-  MUST_USE_RESULT MaybeHandle<JSObject> StructureWalk(Handle<JSObject> object);
+  V8_WARN_UNUSED_RESULT MaybeHandle<JSObject> StructureWalk(
+      Handle<JSObject> object);
 
  protected:
-  MUST_USE_RESULT inline MaybeHandle<JSObject> VisitElementOrProperty(
+  V8_WARN_UNUSED_RESULT inline MaybeHandle<JSObject> VisitElementOrProperty(
       Handle<JSObject> object, Handle<JSObject> value) {
     Handle<AllocationSite> current_site = site_context()->EnterNewScope();
     MaybeHandle<JSObject> copy_of_value = StructureWalk(value);
@@ -165,8 +166,7 @@ MaybeHandle<JSObject> JSObjectWalkVisitor<ContextObject>::StructureWalk(
       break;
     }
     case DICTIONARY_ELEMENTS: {
-      Handle<SeededNumberDictionary> element_dictionary(
-          copy->element_dictionary());
+      Handle<NumberDictionary> element_dictionary(copy->element_dictionary());
       int capacity = element_dictionary->Capacity();
       for (int i = 0; i < capacity; i++) {
         Object* raw = element_dictionary->ValueAt(i);
@@ -373,7 +373,7 @@ struct ObjectBoilerplate {
       // TODO(cbruni): avoid making the boilerplate fast again, the clone stub
       // supports dict-mode objects directly.
       JSObject::MigrateSlowToFast(boilerplate,
-                                  boilerplate->map()->unused_property_fields(),
+                                  boilerplate->map()->UnusedPropertyFields(),
                                   "FastLiteral");
     }
     return boilerplate;

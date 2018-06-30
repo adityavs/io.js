@@ -22,6 +22,7 @@
 'use strict';
 
 const common = require('../common');
+
 const assert = require('assert');
 
 let unref_interval = false;
@@ -31,13 +32,13 @@ let checks = 0;
 const LONG_TIME = 10 * 1000;
 const SHORT_TIME = 100;
 
-assert.doesNotThrow(() => {
-  setTimeout(() => {}, 10).unref().ref().unref();
-}, 'ref and unref are chainable');
+const timer = setTimeout(() => {}, 10);
+assert.strictEqual(timer.hasRef(), true);
+// Should not throw.
+timer.unref().ref().unref();
+assert.strictEqual(timer.hasRef(), false);
 
-assert.doesNotThrow(() => {
-  setInterval(() => {}, 10).unref().ref().unref();
-}, 'ref and unref are chainable');
+setInterval(() => {}, 10).unref().ref().unref();
 
 setInterval(common.mustNotCall('Interval should not fire'), LONG_TIME).unref();
 setTimeout(common.mustNotCall('Timer should not fire'), LONG_TIME).unref();

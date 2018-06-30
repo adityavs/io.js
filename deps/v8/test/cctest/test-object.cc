@@ -3,12 +3,10 @@
 // found in the LICENSE file.
 
 #include "src/api.h"
-#include "src/factory.h"
 #include "src/handles-inl.h"
-#include "src/handles.h"
+#include "src/heap/factory.h"
 #include "src/isolate.h"
 #include "src/objects-inl.h"
-#include "src/objects.h"
 #include "src/v8.h"
 #include "test/cctest/cctest.h"
 
@@ -57,6 +55,9 @@ TEST(NoSideEffectsToString) {
   CheckBoolean(isolate, true, "true");
   CheckBoolean(isolate, false, "false");
   CheckBoolean(isolate, false, "false");
+  Handle<Object> smi_42 = handle(Smi::FromInt(42), isolate);
+  CheckObject(isolate, BigInt::FromNumber(isolate, smi_42).ToHandleChecked(),
+              "42");
   CheckObject(isolate, factory->undefined_value(), "undefined");
   CheckObject(isolate, factory->null_value(), "null");
 

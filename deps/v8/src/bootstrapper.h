@@ -5,7 +5,7 @@
 #ifndef V8_BOOTSTRAPPER_H_
 #define V8_BOOTSTRAPPER_H_
 
-#include "src/factory.h"
+#include "src/heap/factory.h"
 #include "src/objects/shared-function-info.h"
 #include "src/snapshot/natives.h"
 #include "src/visitors.h"
@@ -20,12 +20,12 @@ namespace internal {
 // generate an index for each native JS file.
 class SourceCodeCache final BASE_EMBEDDED {
  public:
-  explicit SourceCodeCache(Script::Type type): type_(type), cache_(NULL) { }
+  explicit SourceCodeCache(Script::Type type) : type_(type), cache_(nullptr) {}
 
   void Initialize(Isolate* isolate, bool create_heap_objects);
 
   void Iterate(RootVisitor* v) {
-    v->VisitRootPointer(Root::kExtensions,
+    v->VisitRootPointer(Root::kExtensions, nullptr,
                         bit_cast<Object**, FixedArray**>(&cache_));
   }
 

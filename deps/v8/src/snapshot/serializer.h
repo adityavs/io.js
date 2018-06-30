@@ -7,6 +7,7 @@
 
 #include <map>
 
+#include "src/instruction-stream.h"
 #include "src/isolate.h"
 #include "src/log.h"
 #include "src/objects.h"
@@ -44,7 +45,7 @@ class CodeAddressMap : public CodeEventLogger {
     NameMap() : impl_() {}
 
     ~NameMap() {
-      for (base::HashMap::Entry* p = impl_.Start(); p != NULL;
+      for (base::HashMap::Entry* p = impl_.Start(); p != nullptr;
            p = impl_.Next(p)) {
         DeleteArray(static_cast<const char*>(p->value));
       }
@@ -52,19 +53,20 @@ class CodeAddressMap : public CodeEventLogger {
 
     void Insert(Address code_address, const char* name, int name_size) {
       base::HashMap::Entry* entry = FindOrCreateEntry(code_address);
-      if (entry->value == NULL) {
+      if (entry->value == nullptr) {
         entry->value = CopyName(name, name_size);
       }
     }
 
     const char* Lookup(Address code_address) {
       base::HashMap::Entry* entry = FindEntry(code_address);
-      return (entry != NULL) ? static_cast<const char*>(entry->value) : NULL;
+      return (entry != nullptr) ? static_cast<const char*>(entry->value)
+                                : nullptr;
     }
 
     void Remove(Address code_address) {
       base::HashMap::Entry* entry = FindEntry(code_address);
-      if (entry != NULL) {
+      if (entry != nullptr) {
         DeleteArray(static_cast<char*>(entry->value));
         RemoveEntry(entry);
       }
@@ -73,11 +75,11 @@ class CodeAddressMap : public CodeEventLogger {
     void Move(Address from, Address to) {
       if (from == to) return;
       base::HashMap::Entry* from_entry = FindEntry(from);
-      DCHECK(from_entry != NULL);
+      DCHECK_NOT_NULL(from_entry);
       void* value = from_entry->value;
       RemoveEntry(from_entry);
       base::HashMap::Entry* to_entry = FindOrCreateEntry(to);
-      DCHECK(to_entry->value == NULL);
+      DCHECK_NULL(to_entry->value);
       to_entry->value = value;
     }
 
@@ -114,6 +116,11 @@ class CodeAddressMap : public CodeEventLogger {
   void LogRecordedBuffer(AbstractCode* code, SharedFunctionInfo*,
                          const char* name, int length) override {
     address_to_name_map_.Insert(code->address(), name, length);
+  }
+
+  void LogRecordedBuffer(const wasm::WasmCode* code, const char* name,
+                         int length) override {
+    UNREACHABLE();
   }
 
   NameMap address_to_name_map_;
@@ -161,7 +168,8 @@ class Serializer : public SerializerDeserializer {
 
   virtual bool MustBeDeferred(HeapObject* object);
 
-  void VisitRootPointers(Root root, Object** start, Object** end) override;
+  void VisitRootPointers(Root root, const char* description, Object** start,
+                         Object** end) override;
 
   void PutRoot(int index, HeapObject* object, HowToCode how, WhereToPoint where,
                int skip);
@@ -181,17 +189,13 @@ class Serializer : public SerializerDeserializer {
   bool SerializeBackReference(HeapObject* obj, HowToCode how_to_code,
                               WhereToPoint where_to_point, int skip);
 
-  // Determines whether the interpreter trampoline is replaced by CompileLazy.
-  enum BuiltinReferenceSerializationMode {
-    kDefault,
-    kCanonicalizeCompileLazy,
-  };
-
   // Returns true if the object was successfully serialized as a builtin
   // reference.
-  bool SerializeBuiltinReference(
-      HeapObject* obj, HowToCode how_to_code, WhereToPoint where_to_point,
-      int skip, BuiltinReferenceSerializationMode mode = kDefault);
+  bool SerializeBuiltinReference(HeapObject* obj, HowToCode how_to_code,
+                                 WhereToPoint where_to_point, int skip);
+
+  // Returns true if the given heap object is a bytecode handler code object.
+  bool ObjectIsBytecodeHandler(HeapObject* obj) const;
 
   inline void FlushSkip(int skip) {
     if (skip != 0) {
@@ -248,7 +252,7 @@ class Serializer : public SerializerDeserializer {
   AllocatorT allocator_;
 
 #ifdef OBJECT_PRINT
-  static const int kInstanceTypes = 256;
+  static const int kInstanceTypes = LAST_TYPE + 1;
   int* instance_type_count_;
   size_t* instance_type_size_;
 #endif  // OBJECT_PRINT
@@ -286,12 +290,15 @@ class Serializer<AllocatorT>::ObjectSerializer : public ObjectVisitor {
   void SerializeObject();
   void SerializeDeferred();
   void VisitPointers(HeapObject* host, Object** start, Object** end) override;
+  void VisitPointers(HeapObject* host, MaybeObject** start,
+                     MaybeObject** end) override;
   void VisitEmbeddedPointer(Code* host, RelocInfo* target) override;
   void VisitExternalReference(Foreign* host, Address* p) override;
   void VisitExternalReference(Code* host, RelocInfo* rinfo) override;
   void VisitInternalReference(Code* host, RelocInfo* rinfo) override;
   void VisitCodeTarget(Code* host, RelocInfo* target) override;
   void VisitRuntimeEntry(Code* host, RelocInfo* reloc) override;
+  void VisitOffHeapTarget(Code* host, RelocInfo* target) override;
 
  private:
   void SerializePrologue(AllocationSpace space, int size, Map* map);
@@ -303,9 +310,8 @@ class Serializer<AllocatorT>::ObjectSerializer : public ObjectVisitor {
   void OutputCode(int size);
   int SkipTo(Address to);
   int32_t SerializeBackingStore(void* backing_store, int32_t byte_length);
-  void FixupIfNeutered();
+  void SerializeJSTypedArray();
   void SerializeJSArrayBuffer();
-  void SerializeFixedTypedArray();
   void SerializeExternalString();
   void SerializeExternalStringAsSequentialString();
 

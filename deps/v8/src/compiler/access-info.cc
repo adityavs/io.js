@@ -25,7 +25,11 @@ bool CanInlineElementAccess(Handle<Map> map) {
   if (map->has_indexed_interceptor()) return false;
   ElementsKind const elements_kind = map->elements_kind();
   if (IsFastElementsKind(elements_kind)) return true;
-  if (IsFixedTypedArrayElementsKind(elements_kind)) return true;
+  if (IsFixedTypedArrayElementsKind(elements_kind) &&
+      elements_kind != BIGUINT64_ELEMENTS &&
+      elements_kind != BIGINT64_ELEMENTS) {
+    return true;
+  }
   return false;
 }
 
@@ -360,8 +364,8 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
         if (details.kind() == kData) {
           int index = descriptors->GetFieldIndex(number);
           Representation details_representation = details.representation();
-          FieldIndex field_index = FieldIndex::ForPropertyIndex(
-              *map, index, details_representation.IsDouble());
+          FieldIndex field_index =
+              FieldIndex::ForPropertyIndex(*map, index, details_representation);
           Type* field_type = Type::NonInternal();
           MachineRepresentation field_representation =
               MachineRepresentation::kTagged;
@@ -446,6 +450,11 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
           if (!accessor->IsJSFunction()) {
             CallOptimization optimization(accessor);
             if (!optimization.is_simple_api_call()) return false;
+            if (optimization.IsCrossContextLazyAccessorPair(*native_context_,
+                                                            *map)) {
+              return false;
+            }
+
             CallOptimization::HolderLookup lookup;
             holder =
                 optimization.LookupHolderOfExpectedType(receiver_map, &lookup);
@@ -528,6 +537,18 @@ bool AccessInfoFactory::ComputePropertyAccessInfo(
   return false;
 }
 
+bool AccessInfoFactory::ComputePropertyAccessInfo(
+    MapHandles const& maps, Handle<Name> name, AccessMode access_mode,
+    PropertyAccessInfo* access_info) {
+  ZoneVector<PropertyAccessInfo> access_infos(zone());
+  if (ComputePropertyAccessInfos(maps, name, access_mode, &access_infos) &&
+      access_infos.size() == 1) {
+    *access_info = access_infos.front();
+    return true;
+  }
+  return false;
+}
+
 bool AccessInfoFactory::ComputePropertyAccessInfos(
     MapHandles const& maps, Handle<Name> name, AccessMode access_mode,
     ZoneVector<PropertyAccessInfo>* access_infos) {
@@ -595,9 +616,8 @@ bool AccessInfoFactory::ConsolidateElementLoad(MapHandles const& maps,
 bool AccessInfoFactory::LookupSpecialFieldAccessor(
     Handle<Map> map, Handle<Name> name, PropertyAccessInfo* access_info) {
   // Check for special JSObject field accessors.
-  int offset;
-  if (Accessors::IsJSObjectFieldAccessor(map, name, &offset)) {
-    FieldIndex field_index = FieldIndex::ForInObjectOffset(offset);
+  FieldIndex field_index;
+  if (Accessors::IsJSObjectFieldAccessor(map, name, &field_index)) {
     Type* field_type = Type::NonInternal();
     MachineRepresentation field_representation = MachineRepresentation::kTagged;
     if (map->IsStringMap()) {
@@ -651,8 +671,8 @@ bool AccessInfoFactory::LookupTransition(Handle<Map> map, Handle<Name> name,
   if (details.location() != kField) return false;
   int const index = details.field_index();
   Representation details_representation = details.representation();
-  FieldIndex field_index = FieldIndex::ForPropertyIndex(
-      *transition_map, index, details_representation.IsDouble());
+  FieldIndex field_index = FieldIndex::ForPropertyIndex(*transition_map, index,
+                                                        details_representation);
   Type* field_type = Type::NonInternal();
   MaybeHandle<Map> field_map;
   MachineRepresentation field_representation = MachineRepresentation::kTagged;

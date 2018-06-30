@@ -227,7 +227,7 @@ void CpuFeatures::ProbeImpl(bool cross_compile) {
 }
 
 void CpuFeatures::PrintTarget() {
-  const char* s390_arch = NULL;
+  const char* s390_arch = nullptr;
 
 #if V8_TARGET_ARCH_S390X
   s390_arch = "s390x";
@@ -271,23 +271,33 @@ bool RelocInfo::IsCodedSpecially() {
 bool RelocInfo::IsInConstantPool() { return false; }
 
 Address RelocInfo::embedded_address() const {
-  return Assembler::target_address_at(pc_, host_);
+  return Assembler::target_address_at(pc_, constant_pool_);
 }
 
 uint32_t RelocInfo::embedded_size() const {
-  return static_cast<uint32_t>(
-      reinterpret_cast<intptr_t>(Assembler::target_address_at(pc_, host_)));
+  return static_cast<uint32_t>(reinterpret_cast<intptr_t>(
+      Assembler::target_address_at(pc_, constant_pool_)));
 }
 
-void RelocInfo::set_embedded_address(Isolate* isolate, Address address,
+void RelocInfo::set_embedded_address(Address address,
                                      ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_, address, flush_mode);
+  Assembler::set_target_address_at(pc_, constant_pool_, address, flush_mode);
 }
 
-void RelocInfo::set_embedded_size(Isolate* isolate, uint32_t size,
-                                  ICacheFlushMode flush_mode) {
-  Assembler::set_target_address_at(isolate, pc_, host_,
+void RelocInfo::set_embedded_size(uint32_t size, ICacheFlushMode flush_mode) {
+  Assembler::set_target_address_at(pc_, constant_pool_,
                                    reinterpret_cast<Address>(size), flush_mode);
+}
+
+void RelocInfo::set_js_to_wasm_address(Address address,
+                                       ICacheFlushMode icache_flush_mode) {
+  DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
+  set_embedded_address(address, icache_flush_mode);
+}
+
+Address RelocInfo::js_to_wasm_address() const {
+  DCHECK_EQ(rmode_, JS_TO_WASM_CALL);
+  return embedded_address();
 }
 
 // -----------------------------------------------------------------------------
@@ -324,7 +334,7 @@ void Assembler::AllocateAndInstallRequestedHeapObjects(Isolate* isolate) {
       case HeapObjectRequest::kHeapNumber:
         object = isolate->factory()->NewHeapNumber(request.heap_number(),
                                                    IMMUTABLE, TENURED);
-        set_target_address_at(nullptr, pc, static_cast<Address>(NULL),
+        set_target_address_at(pc, static_cast<Address>(nullptr),
                               reinterpret_cast<Address>(object.location()),
                               SKIP_ICACHE_FLUSH);
         break;
@@ -361,6 +371,7 @@ void Assembler::GetCode(Isolate* isolate, CodeDesc* desc) {
   desc->buffer_size = buffer_size_;
   desc->instr_size = pc_offset();
   desc->reloc_size = (buffer_ + buffer_size_) - reloc_info_writer.pos();
+  desc->constant_pool_size = 0;
   desc->origin = this;
   desc->unwinding_info_size = 0;
   desc->unwinding_info = nullptr;
@@ -430,7 +441,7 @@ int Assembler::target_at(int pos) {
   } else if (LLILF == opcode || BRCL == opcode || LARL == opcode ||
              BRASL == opcode) {
     int32_t imm32 =
-        static_cast<int32_t>(instr & (static_cast<uint64_t>(0xffffffff)));
+        static_cast<int32_t>(instr & (static_cast<uint64_t>(0xFFFFFFFF)));
     if (LLILF != opcode)
       imm32 <<= 1;  // BR* + LARL treat immediate in # of halfwords
     if (imm32 == 0) return kEndOfChain;
@@ -454,14 +465,14 @@ void Assembler::target_at_put(int pos, int target_pos, bool* is_branch) {
 
   if (BRC == opcode || BRCT == opcode || BRCTG == opcode) {
     int16_t imm16 = target_pos - pos;
-    instr &= (~0xffff);
+    instr &= (~0xFFFF);
     DCHECK(is_int16(imm16));
     instr_at_put<FourByteInstr>(pos, instr | (imm16 >> 1));
     return;
   } else if (BRCL == opcode || LARL == opcode || BRASL == opcode) {
     // Immediate is in # of halfwords
     int32_t imm32 = target_pos - pos;
-    instr &= (~static_cast<uint64_t>(0xffffffff));
+    instr &= (~static_cast<uint64_t>(0xFFFFFFFF));
     instr_at_put<SixByteInstr>(pos, instr | (imm32 >> 1));
     return;
   } else if (LLILF == opcode) {
@@ -469,7 +480,7 @@ void Assembler::target_at_put(int pos, int target_pos, bool* is_branch) {
     // Emitted label constant, not part of a branch.
     // Make label relative to Code* of generated Code object.
     int32_t imm32 = target_pos + (Code::kHeaderSize - kHeapObjectTag);
-    instr &= (~static_cast<uint64_t>(0xffffffff));
+    instr &= (~static_cast<uint64_t>(0xFFFFFFFF));
     instr_at_put<SixByteInstr>(pos, instr | imm32);
     return;
   }
@@ -526,7 +537,7 @@ void Assembler::next(Label* L) {
   if (link == kEndOfChain) {
     L->Unuse();
   } else {
-    DCHECK(link >= 0);
+    DCHECK_GE(link, 0);
     L->link_to(link);
   }
 }
@@ -1480,8 +1491,8 @@ void Assembler::ark(Register r1, Register r2, Register r3) {
 void Assembler::asi(const MemOperand& opnd, const Operand& imm) {
   DCHECK(is_int8(imm.immediate()));
   DCHECK(is_int20(opnd.offset()));
-  siy_form(ASI, Operand(0xff & imm.immediate()), opnd.rb(),
-           0xfffff & opnd.offset());
+  siy_form(ASI, Operand(0xFF & imm.immediate()), opnd.rb(),
+           0xFFFFF & opnd.offset());
 }
 
 // -----------------------
@@ -1504,8 +1515,8 @@ void Assembler::agrk(Register r1, Register r2, Register r3) {
 void Assembler::agsi(const MemOperand& opnd, const Operand& imm) {
   DCHECK(is_int8(imm.immediate()));
   DCHECK(is_int20(opnd.offset()));
-  siy_form(AGSI, Operand(0xff & imm.immediate()), opnd.rb(),
-           0xfffff & opnd.offset());
+  siy_form(AGSI, Operand(0xFF & imm.immediate()), opnd.rb(),
+           0xFFFFF & opnd.offset());
 }
 
 // -------------------------------
@@ -1697,7 +1708,7 @@ void Assembler::sllg(Register r1, Register r3, const Operand& opnd) {
 
 // Shift Left Double Logical (64)
 void Assembler::sldl(Register r1, Register b2, const Operand& opnd) {
-  DCHECK(r1.code() % 2 == 0);
+  DCHECK_EQ(r1.code() % 2, 0);
   rs_form(SLDL, r1, r0, b2, opnd.immediate());
 }
 
@@ -1709,13 +1720,13 @@ void Assembler::srl(Register r1, Register opnd) {
 
 // Shift Right Double Arith (64)
 void Assembler::srda(Register r1, Register b2, const Operand& opnd) {
-  DCHECK(r1.code() % 2 == 0);
+  DCHECK_EQ(r1.code() % 2, 0);
   rs_form(SRDA, r1, r0, b2, opnd.immediate());
 }
 
 // Shift Right Double Logical (64)
 void Assembler::srdl(Register r1, Register b2, const Operand& opnd) {
-  DCHECK(r1.code() % 2 == 0);
+  DCHECK_EQ(r1.code() % 2, 0);
   rs_form(SRDL, r1, r0, b2, opnd.immediate());
 }
 
@@ -1813,13 +1824,13 @@ void Assembler::srag(Register r1, Register r3, const Operand& opnd) {
 
 // Shift Right Double
 void Assembler::srda(Register r1, const Operand& opnd) {
-  DCHECK(r1.code() % 2 == 0);
+  DCHECK_EQ(r1.code() % 2, 0);
   rs_form(SRDA, r1, r0, r0, opnd.immediate());
 }
 
 // Shift Right Double Logical
 void Assembler::srdl(Register r1, const Operand& opnd) {
-  DCHECK(r1.code() % 2 == 0);
+  DCHECK_EQ(r1.code() % 2, 0);
   rs_form(SRDL, r1, r0, r0, opnd.immediate());
 }
 
@@ -2080,9 +2091,9 @@ void Assembler::fidbra(DoubleRegister d1, DoubleRegister d2, FIDBRA_MASK3 m3) {
 bool Assembler::IsNop(SixByteInstr instr, int type) {
   DCHECK((0 == type) || (DEBUG_BREAK_NOP == type));
   if (DEBUG_BREAK_NOP == type) {
-    return ((instr & 0xffffffff) == 0xa53b0000);  // oill r3, 0
+    return ((instr & 0xFFFFFFFF) == 0xA53B0000);  // oill r3, 0
   }
-  return ((instr & 0xffff) == 0x1800);  // lr r0,r0
+  return ((instr & 0xFFFF) == 0x1800);  // lr r0,r0
 }
 
 // dummy instruction reserved for special use.
@@ -2120,7 +2131,7 @@ void Assembler::GrowBuffer(int needed) {
   // Some internal data structures overflow for very large buffers,
   // they must ensure that kMaximalBufferSize is not too large.
   if (desc.buffer_size > kMaximalBufferSize) {
-    V8::FatalProcessOutOfMemory("Assembler::GrowBuffer");
+    V8::FatalProcessOutOfMemory(nullptr, "Assembler::GrowBuffer");
   }
 
   // Set up new buffer.
@@ -2202,8 +2213,7 @@ void Assembler::EmitRelocations() {
        it != relocations_.end(); it++) {
     RelocInfo::Mode rmode = it->rmode();
     Address pc = buffer_ + it->position();
-    Code* code = NULL;
-    RelocInfo rinfo(pc, rmode, it->data(), code);
+    RelocInfo rinfo(pc, rmode, it->data(), nullptr);
 
     // Fix up internal references now that they are guaranteed to be bound.
     if (RelocInfo::IsInternalReference(rmode)) {
@@ -2212,9 +2222,8 @@ void Assembler::EmitRelocations() {
       Memory::Address_at(pc) = buffer_ + pos;
     } else if (RelocInfo::IsInternalReferenceEncoded(rmode)) {
       // mov sequence
-      intptr_t pos = reinterpret_cast<intptr_t>(target_address_at(pc, code));
-      set_target_address_at(nullptr, pc, code, buffer_ + pos,
-                            SKIP_ICACHE_FLUSH);
+      intptr_t pos = reinterpret_cast<intptr_t>(target_address_at(pc, nullptr));
+      set_target_address_at(pc, nullptr, buffer_ + pos, SKIP_ICACHE_FLUSH);
     }
 
     reloc_info_writer.Write(&rinfo);

@@ -82,9 +82,8 @@ void ScopeIterator::TryParseAndRetrieveScopes(ScopeIterator::Option option) {
       }
     }
     if (scope_info->scope_type() == FUNCTION_SCOPE) {
-      nested_scope_chain_.emplace_back(scope_info,
-                                       shared_info->start_position(),
-                                       shared_info->end_position());
+      nested_scope_chain_.emplace_back(scope_info, shared_info->StartPosition(),
+                                       shared_info->EndPosition());
     }
     if (!collect_non_locals) return;
   }
@@ -105,7 +104,7 @@ void ScopeIterator::TryParseAndRetrieveScopes(ScopeIterator::Option option) {
       // Retrieve it from shared function info.
       info->set_language_mode(shared_info->language_mode());
     } else if (scope_info->scope_type() == MODULE_SCOPE) {
-      info->set_module();
+      DCHECK(info->is_module());
     } else {
       DCHECK(scope_info->scope_type() == SCRIPT_SCOPE);
     }
@@ -121,10 +120,11 @@ void ScopeIterator::TryParseAndRetrieveScopes(ScopeIterator::Option option) {
       CollectNonLocals(info.get(), scope);
     }
     if (!ignore_nested_scopes) {
-      DeclarationScope::Analyze(info.get());
-      DeclarationScope::AllocateScopeInfos(info.get(), isolate_,
-                                           AnalyzeMode::kDebugger);
-      RetrieveScopeChain(scope);
+      if (DeclarationScope::Analyze(info.get())) {
+        DeclarationScope::AllocateScopeInfos(info.get(), isolate_,
+                                             AnalyzeMode::kDebugger);
+        RetrieveScopeChain(scope);
+      }
     }
   } else {
     // A failed reparse indicates that the preparser has diverged from the
@@ -176,8 +176,8 @@ void ScopeIterator::UnwrapEvaluationContext() {
   }
 }
 
-
-MUST_USE_RESULT MaybeHandle<JSObject> ScopeIterator::MaterializeScopeDetails() {
+V8_WARN_UNUSED_RESULT MaybeHandle<JSObject>
+ScopeIterator::MaterializeScopeDetails() {
   // Calculate the size of the result.
   Handle<FixedArray> details =
       isolate_->factory()->NewFixedArray(kScopeDetailsSize);
@@ -218,7 +218,7 @@ int ScopeIterator::start_position() {
   }
   if (!HasContext()) return 0;
   Handle<JSFunction> js_function = handle(CurrentContext()->closure());
-  return js_function.is_null() ? 0 : js_function->shared()->start_position();
+  return js_function.is_null() ? 0 : js_function->shared()->StartPosition();
 }
 
 int ScopeIterator::end_position() {
@@ -227,7 +227,7 @@ int ScopeIterator::end_position() {
   }
   if (!HasContext()) return 0;
   Handle<JSFunction> js_function = handle(CurrentContext()->closure());
-  return js_function.is_null() ? 0 : js_function->shared()->end_position();
+  return js_function.is_null() ? 0 : js_function->shared()->EndPosition();
 }
 
 void ScopeIterator::Next() {
@@ -253,7 +253,7 @@ void ScopeIterator::Next() {
   } else {
     do {
       if (LastNestedScopeChain().scope_info->HasContext()) {
-        DCHECK(context_->previous() != NULL);
+        DCHECK(context_->previous() != nullptr);
         context_ = Handle<Context>(context_->previous(), isolate_);
       }
       nested_scope_chain_.pop_back();
@@ -956,8 +956,8 @@ void ScopeIterator::GetNestedScopeChain(Isolate* isolate, Scope* scope,
     // Do not collect scopes of nested inner functions inside the current one.
     // Nested arrow functions could have the same end positions.
     Handle<JSFunction> function = GetFunction();
-    if (scope->start_position() > function->shared()->start_position() &&
-        scope->end_position() <= function->shared()->end_position()) {
+    if (scope->start_position() > function->shared()->StartPosition() &&
+        scope->end_position() <= function->shared()->EndPosition()) {
       return;
     }
   }

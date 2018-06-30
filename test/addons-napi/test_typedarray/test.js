@@ -3,7 +3,7 @@ const common = require('../../common');
 const assert = require('assert');
 
 // Testing api calls for arrays
-const test_typedarray = require(`./build/${common.buildType}/binding`);
+const test_typedarray = require(`./build/${common.buildType}/test_typedarray`);
 
 const byteArray = new Uint8Array(3);
 byteArray[0] = 0;
@@ -60,7 +60,7 @@ arrayTypes.forEach((currentType) => {
   const template = Reflect.construct(currentType, buffer);
   assert.throws(() => {
     test_typedarray.CreateTypedArray(template, buffer, 0, 136);
-  }, /Invalid typed array length/);
+  }, RangeError);
 });
 
 const nonByteArrayTypes = [ Int16Array, Uint16Array, Int32Array, Uint32Array,
@@ -71,5 +71,5 @@ nonByteArrayTypes.forEach((currentType) => {
     test_typedarray.CreateTypedArray(template, buffer,
                                      currentType.BYTES_PER_ELEMENT + 1, 1);
     console.log(`start of offset ${currentType}`);
-  }, /start offset of/);
+  }, RangeError);
 });

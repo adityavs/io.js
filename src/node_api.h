@@ -1,12 +1,3 @@
-/******************************************************************************
- * Experimental prototype for demonstrating VM agnostic and ABI stable API
- * for native modules to use instead of using Nan and V8 APIs directly.
- *
- * The current status is "Experimental" and should not be used for
- * production applications.  The API is still subject to change
- * and as an experimental feature is NOT subject to semver.
- *
- ******************************************************************************/
 #ifndef SRC_NODE_API_H_
 #define SRC_NODE_API_H_
 
@@ -99,8 +90,27 @@ typedef struct {
     }                                                                 \
   EXTERN_C_END
 
-#define NAPI_MODULE(modname, regfunc) \
+#define NAPI_MODULE(modname, regfunc)                                 \
   NAPI_MODULE_X(modname, regfunc, NULL, 0)  // NOLINT (readability/null_usage)
+
+#define NAPI_MODULE_INITIALIZER_BASE napi_register_module_v
+
+#define NAPI_MODULE_INITIALIZER_X(base, version)                      \
+    NAPI_MODULE_INITIALIZER_X_HELPER(base, version)
+#define NAPI_MODULE_INITIALIZER_X_HELPER(base, version) base##version
+
+#define NAPI_MODULE_INITIALIZER                                       \
+  NAPI_MODULE_INITIALIZER_X(NAPI_MODULE_INITIALIZER_BASE,             \
+      NAPI_MODULE_VERSION)
+
+#define NAPI_MODULE_INIT()                                            \
+  EXTERN_C_START                                                      \
+  NAPI_MODULE_EXPORT napi_value                                       \
+  NAPI_MODULE_INITIALIZER(napi_env env, napi_value exports);          \
+  EXTERN_C_END                                                        \
+  NAPI_MODULE(NODE_GYP_MODULE_NAME, NAPI_MODULE_INITIALIZER)          \
+  napi_value NAPI_MODULE_INITIALIZER(napi_env env,                    \
+                                     napi_value exports)
 
 #define NAPI_AUTO_LENGTH SIZE_MAX
 
@@ -108,9 +118,18 @@ EXTERN_C_START
 
 NAPI_EXTERN void napi_module_register(napi_module* mod);
 
+NAPI_EXTERN napi_status napi_add_env_cleanup_hook(napi_env env,
+                                                  void (*fun)(void* arg),
+                                                  void* arg);
+NAPI_EXTERN napi_status napi_remove_env_cleanup_hook(napi_env env,
+                                                     void (*fun)(void* arg),
+                                                     void* arg);
+
 NAPI_EXTERN napi_status
 napi_get_last_error_info(napi_env env,
                          const napi_extended_error_info** result);
+
+NAPI_EXTERN napi_status napi_fatal_exception(napi_env env, napi_value err);
 
 NAPI_EXTERN NAPI_NO_RETURN void napi_fatal_error(const char* location,
                                                  size_t location_len,
@@ -424,6 +443,14 @@ NAPI_EXTERN napi_status napi_escape_handle(napi_env env,
                                            napi_value escapee,
                                            napi_value* result);
 
+NAPI_EXTERN napi_status napi_open_callback_scope(napi_env env,
+                                                 napi_value resource_object,
+                                                 napi_async_context context,
+                                                 napi_callback_scope* result);
+
+NAPI_EXTERN napi_status napi_close_callback_scope(napi_env env,
+                                                  napi_callback_scope scope);
+
 // Methods to support error handling
 NAPI_EXTERN napi_status napi_throw(napi_env env, napi_value error);
 NAPI_EXTERN napi_status napi_throw_error(napi_env env,
@@ -587,6 +614,44 @@ NAPI_EXTERN napi_status napi_run_script(napi_env env,
 NAPI_EXTERN napi_status napi_get_uv_event_loop(napi_env env,
                                                struct uv_loop_s** loop);
 
+#ifdef NAPI_EXPERIMENTAL
+// Calling into JS from other threads
+NAPI_EXTERN napi_status
+napi_create_threadsafe_function(napi_env env,
+                                napi_value func,
+                                napi_value async_resource,
+                                napi_value async_resource_name,
+                                size_t max_queue_size,
+                                size_t initial_thread_count,
+                                void* thread_finalize_data,
+                                napi_finalize thread_finalize_cb,
+                                void* context,
+                                napi_threadsafe_function_call_js call_js_cb,
+                                napi_threadsafe_function* result);
+
+NAPI_EXTERN napi_status
+napi_get_threadsafe_function_context(napi_threadsafe_function func,
+                                     void** result);
+
+NAPI_EXTERN napi_status
+napi_call_threadsafe_function(napi_threadsafe_function func,
+                              void* data,
+                              napi_threadsafe_function_call_mode is_blocking);
+
+NAPI_EXTERN napi_status
+napi_acquire_threadsafe_function(napi_threadsafe_function func);
+
+NAPI_EXTERN napi_status
+napi_release_threadsafe_function(napi_threadsafe_function func,
+                                 napi_threadsafe_function_release_mode mode);
+
+NAPI_EXTERN napi_status
+napi_unref_threadsafe_function(napi_env env, napi_threadsafe_function func);
+
+NAPI_EXTERN napi_status
+napi_ref_threadsafe_function(napi_env env, napi_threadsafe_function func);
+
+#endif  // NAPI_EXPERIMENTAL
 EXTERN_C_END
 
 #endif  // SRC_NODE_API_H_

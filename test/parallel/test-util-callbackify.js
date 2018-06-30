@@ -220,7 +220,9 @@ const values = [
     [fixture],
     common.mustCall((err, stdout, stderr) => {
       assert.ifError(err);
-      assert.strictEqual(stdout.trim(), fixture);
+      assert.strictEqual(
+        stdout.trim(),
+        `ifError got unwanted exception: ${fixture}`);
       assert.strictEqual(stderr, '');
     })
   );
@@ -234,7 +236,8 @@ const values = [
     }, {
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
-      message: 'The "original" argument must be of type Function'
+      message: 'The "original" argument must be of type Function. ' +
+               `Received type ${typeof value}`
     });
   });
 }
@@ -255,7 +258,8 @@ const values = [
     }, {
       code: 'ERR_INVALID_ARG_TYPE',
       type: TypeError,
-      message: 'The last argument must be of type Function'
+      message: 'The last argument must be of type Function. ' +
+               `Received type ${typeof value}`
     });
   });
 }

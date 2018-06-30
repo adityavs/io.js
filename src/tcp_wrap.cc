@@ -25,8 +25,9 @@
 #include "env-inl.h"
 #include "handle_wrap.h"
 #include "node_buffer.h"
-#include "node_wrap.h"
+#include "node_internals.h"
 #include "connect_wrap.h"
+#include "stream_base-inl.h"
 #include "stream_wrap.h"
 #include "util-inl.h"
 
@@ -56,8 +57,7 @@ Local<Object> TCPWrap::Instantiate(Environment* env,
                                    AsyncWrap* parent,
                                    TCPWrap::SocketType type) {
   EscapableHandleScope handle_scope(env->isolate());
-  AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(
-    env, parent->get_async_id());
+  AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(parent);
   CHECK_EQ(env->tcp_constructor_template().IsEmpty(), false);
   Local<Function> constructor = env->tcp_constructor_template()->GetFunction();
   CHECK_EQ(constructor.IsEmpty(), false);
@@ -93,7 +93,7 @@ void TCPWrap::Initialize(Local<Object> target,
   env->SetProtoMethod(t, "unref", HandleWrap::Unref);
   env->SetProtoMethod(t, "hasRef", HandleWrap::HasRef);
 
-  LibuvStreamWrap::AddMethods(env, t, StreamBase::kFlagHasWritev);
+  LibuvStreamWrap::AddMethods(env, t);
 
   env->SetProtoMethod(t, "open", Open);
   env->SetProtoMethod(t, "bind", Bind);
@@ -116,12 +116,8 @@ void TCPWrap::Initialize(Local<Object> target,
   env->set_tcp_constructor_template(t);
 
   // Create FunctionTemplate for TCPConnectWrap.
-  auto constructor = [](const FunctionCallbackInfo<Value>& args) {
-    CHECK(args.IsConstructCall());
-    ClearWrap(args.This());
-  };
-  auto cwt = FunctionTemplate::New(env->isolate(), constructor);
-  cwt->InstanceTemplate()->SetInternalFieldCount(1);
+  Local<FunctionTemplate> cwt =
+      BaseObject::MakeLazilyInitializedJSTemplate(env);
   AsyncWrap::AddWrapMethods(env, cwt);
   Local<String> wrapString =
       FIXED_ONE_BYTE_STRING(env->isolate(), "TCPConnectWrap");
@@ -173,11 +169,6 @@ TCPWrap::TCPWrap(Environment* env, Local<Object> object, ProviderType provider)
 }
 
 
-TCPWrap::~TCPWrap() {
-  CHECK(persistent().IsEmpty());
-}
-
-
 void TCPWrap::SetNoDelay(const FunctionCallbackInfo<Value>& args) {
   TCPWrap* wrap;
   ASSIGN_OR_RETURN_UNWRAP(&wrap,
@@ -220,7 +211,12 @@ void TCPWrap::Open(const FunctionCallbackInfo<Value>& args) {
                           args.Holder(),
                           args.GetReturnValue().Set(UV_EBADF));
   int fd = static_cast<int>(args[0]->IntegerValue());
-  uv_tcp_open(&wrap->handle_, fd);
+  int err = uv_tcp_open(&wrap->handle_, fd);
+
+  if (err == 0)
+    wrap->set_fd(fd);
+
+  args.GetReturnValue().Set(err);
 }
 
 
@@ -293,15 +289,13 @@ void TCPWrap::Connect(const FunctionCallbackInfo<Value>& args) {
   int err = uv_ip4_addr(*ip_address, port, &addr);
 
   if (err == 0) {
-    AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(
-      env, wrap->get_async_id());
+    AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(wrap);
     ConnectWrap* req_wrap =
         new ConnectWrap(env, req_wrap_obj, AsyncWrap::PROVIDER_TCPCONNECTWRAP);
-    err = uv_tcp_connect(req_wrap->req(),
-                         &wrap->handle_,
-                         reinterpret_cast<const sockaddr*>(&addr),
-                         AfterConnect);
-    req_wrap->Dispatched();
+    err = req_wrap->Dispatch(uv_tcp_connect,
+                             &wrap->handle_,
+                             reinterpret_cast<const sockaddr*>(&addr),
+                             AfterConnect);
     if (err)
       delete req_wrap;
   }
@@ -330,15 +324,13 @@ void TCPWrap::Connect6(const FunctionCallbackInfo<Value>& args) {
   int err = uv_ip6_addr(*ip_address, port, &addr);
 
   if (err == 0) {
-    AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(
-      env, wrap->get_async_id());
+    AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(wrap);
     ConnectWrap* req_wrap =
         new ConnectWrap(env, req_wrap_obj, AsyncWrap::PROVIDER_TCPCONNECTWRAP);
-    err = uv_tcp_connect(req_wrap->req(),
-                         &wrap->handle_,
-                         reinterpret_cast<const sockaddr*>(&addr),
-                         AfterConnect);
-    req_wrap->Dispatched();
+    err = req_wrap->Dispatch(uv_tcp_connect,
+                             &wrap->handle_,
+                             reinterpret_cast<const sockaddr*>(&addr),
+                             AfterConnect);
     if (err)
       delete req_wrap;
   }
@@ -353,8 +345,8 @@ Local<Object> AddressToJS(Environment* env,
                           Local<Object> info) {
   EscapableHandleScope scope(env->isolate());
   char ip[INET6_ADDRSTRLEN];
-  const sockaddr_in *a4;
-  const sockaddr_in6 *a6;
+  const sockaddr_in* a4;
+  const sockaddr_in6* a6;
   int port;
 
   if (info.IsEmpty())

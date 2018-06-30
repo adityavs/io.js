@@ -22,7 +22,7 @@
 #ifndef SRC_NODE_VERSION_H_
 #define SRC_NODE_VERSION_H_
 
-#define NODE_MAJOR_VERSION 10
+#define NODE_MAJOR_VERSION 11
 #define NODE_MINOR_VERSION 0
 #define NODE_PATCH_VERSION 0
 
@@ -104,12 +104,16 @@
  * V8 6.1: 58
  * V8 6.2: 59
  * V8 6.3: 60
+ * V8 6.4: 61
+ * V8 6.5: 62
+ * V8 6.6: 63
+ * V8 6.7: 64
  *
  * More information can be found at https://nodejs.org/en/download/releases/
  */
-#define NODE_MODULE_VERSION 60
+#define NODE_MODULE_VERSION 64
 
 // the NAPI_VERSION provided by this version of the runtime
-#define NAPI_VERSION  2
+#define NAPI_VERSION  3
 
 #endif  // SRC_NODE_VERSION_H_

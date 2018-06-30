@@ -32,9 +32,8 @@
 // modified significantly by Google Inc.
 // Copyright 2012 the V8 project authors. All rights reserved.
 
-
-#ifndef V8_MIPS_ASSEMBLER_MIPS_H_
-#define V8_MIPS_ASSEMBLER_MIPS_H_
+#ifndef V8_MIPS64_ASSEMBLER_MIPS64_H_
+#define V8_MIPS64_ASSEMBLER_MIPS64_H_
 
 #include <stdio.h>
 
@@ -54,8 +53,9 @@ namespace internal {
   V(k0)  V(k1)  V(gp)  V(sp)  V(fp)  V(ra)
 
 #define ALLOCATABLE_GENERAL_REGISTERS(V) \
-  V(v0)  V(v1)  V(a0)  V(a1)  V(a2)  V(a3) \
-  V(a4)  V(a5)  V(a6)  V(a7)  V(t0)  V(t1)  V(t2) V(s7)
+  V(a0)  V(a1)  V(a2)  V(a3) \
+  V(a4)  V(a5)  V(a6)  V(a7)  V(t0)  V(t1)  V(t2) V(s7) \
+  V(v0)  V(v1)
 
 #define DOUBLE_REGISTERS(V)                               \
   V(f0)  V(f1)  V(f2)  V(f3)  V(f4)  V(f5)  V(f6)  V(f7)  \
@@ -237,6 +237,7 @@ int ToNumber(Register reg);
 
 Register ToRegister(int num);
 
+constexpr bool kPadArguments = false;
 constexpr bool kSimpleFPAliasing = true;
 constexpr bool kSimdMaskRegisters = false;
 
@@ -257,13 +258,13 @@ class FPURegister : public RegisterBase<FPURegister, kDoubleAfterLast> {
   FPURegister low() const {
     // TODO(plind): Create DCHECK for FR=0 mode. This usage suspect for FR=1.
     // Find low reg of a Double-reg pair, which is the reg itself.
-    DCHECK(code() % 2 == 0);  // Specified Double reg must be even.
+    DCHECK_EQ(code() % 2, 0);  // Specified Double reg must be even.
     return FPURegister::from_code(code());
   }
   FPURegister high() const {
     // TODO(plind): Create DCHECK for FR=0 mode. This usage illegal in FR=1.
     // Find high reg of a Doubel-reg pair, which is reg + 1.
-    DCHECK(code() % 2 == 0);  // Specified Double reg must be even.
+    DCHECK_EQ(code() % 2, 0);  // Specified Double reg must be even.
     return FPURegister::from_code(code() + 1);
   }
 
@@ -324,9 +325,9 @@ const Simd128Register no_msareg = Simd128Register::no_reg();
 // cp is assumed to be a callee saved register.
 constexpr Register kRootRegister = s6;
 constexpr Register cp = s7;
-constexpr Register kLithiumScratchReg = s3;
-constexpr Register kLithiumScratchReg2 = s4;
-constexpr DoubleRegister kLithiumScratchDouble = f30;
+constexpr Register kScratchReg = s3;
+constexpr Register kScratchReg2 = s4;
+constexpr DoubleRegister kScratchDoubleReg = f30;
 constexpr DoubleRegister kDoubleRegZero = f28;
 // Used on mips64r6 for compare operations.
 // We use the last non-callee saved odd register for N64 ABI
@@ -394,7 +395,7 @@ class Operand BASE_EMBEDDED {
  public:
   // Immediate.
   INLINE(explicit Operand(int64_t immediate,
-                          RelocInfo::Mode rmode = RelocInfo::NONE64))
+                          RelocInfo::Mode rmode = RelocInfo::NONE))
       : rm_(no_reg), rmode_(rmode) {
     value_.immediate = immediate;
   }
@@ -406,8 +407,7 @@ class Operand BASE_EMBEDDED {
   INLINE(explicit Operand(Object** opp));
   INLINE(explicit Operand(Context** cpp));
   explicit Operand(Handle<HeapObject> handle);
-  INLINE(explicit Operand(Smi* value))
-      : rm_(no_reg), rmode_(RelocInfo::NONE32) {
+  INLINE(explicit Operand(Smi* value)) : rm_(no_reg), rmode_(RelocInfo::NONE) {
     value_.immediate = reinterpret_cast<intptr_t>(value);
   }
 
@@ -489,14 +489,15 @@ class Assembler : public AssemblerBase {
   // relocation information starting from the end of the buffer. See CodeDesc
   // for a detailed comment on the layout (globals.h).
   //
-  // If the provided buffer is NULL, the assembler allocates and grows its own
-  // buffer, and buffer_size determines the initial buffer size. The buffer is
-  // owned by the assembler and deallocated upon destruction of the assembler.
+  // If the provided buffer is nullptr, the assembler allocates and grows its
+  // own buffer, and buffer_size determines the initial buffer size. The buffer
+  // is owned by the assembler and deallocated upon destruction of the
+  // assembler.
   //
-  // If the provided buffer is not NULL, the assembler uses the provided buffer
-  // for code generation and assumes its size to be buffer_size. If the buffer
-  // is too small, a fatal error occurs. No deallocation of the buffer is done
-  // upon destruction of the assembler.
+  // If the provided buffer is not nullptr, the assembler uses the provided
+  // buffer for code generation and assumes its size to be buffer_size. If the
+  // buffer is too small, a fatal error occurs. No deallocation of the buffer is
+  // done upon destruction of the assembler.
   Assembler(Isolate* isolate, void* buffer, int buffer_size)
       : Assembler(IsolateData(isolate), buffer, buffer_size) {}
   Assembler(IsolateData isolate_data, void* buffer, int buffer_size);
@@ -535,7 +536,7 @@ class Assembler : public AssemblerBase {
     return pc_offset() - L->pos() < kMaxBranchOffset - 4 * kInstrSize;
   }
   inline bool is_near_r6(Label* L) {
-    DCHECK(kArchVariant == kMips64r6);
+    DCHECK_EQ(kArchVariant, kMips64r6);
     return pc_offset() - L->pos() < kMaxCompactBranchOffset - 4 * kInstrSize;
   }
 
@@ -574,9 +575,9 @@ class Assembler : public AssemblerBase {
   // The isolate argument is unused (and may be nullptr) when skipping flushing.
   static Address target_address_at(Address pc);
   INLINE(static void set_target_address_at(
-      Isolate* isolate, Address pc, Address target,
+      Address pc, Address target,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED)) {
-    set_target_value_at(isolate, pc, reinterpret_cast<uint64_t>(target),
+    set_target_value_at(pc, reinterpret_cast<uint64_t>(target),
                         icache_flush_mode);
   }
   // On MIPS there is no Constant Pool so we skip that parameter.
@@ -584,17 +585,13 @@ class Assembler : public AssemblerBase {
     return target_address_at(pc);
   }
   INLINE(static void set_target_address_at(
-      Isolate* isolate, Address pc, Address constant_pool, Address target,
+      Address pc, Address constant_pool, Address target,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED)) {
-    set_target_address_at(isolate, pc, target, icache_flush_mode);
+    set_target_address_at(pc, target, icache_flush_mode);
   }
-  INLINE(static Address target_address_at(Address pc, Code* code));
-  INLINE(static void set_target_address_at(
-      Isolate* isolate, Address pc, Code* code, Address target,
-      ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED));
 
   static void set_target_value_at(
-      Isolate* isolate, Address pc, uint64_t target,
+      Address pc, uint64_t target,
       ICacheFlushMode icache_flush_mode = FLUSH_ICACHE_IF_NEEDED);
 
   // Return the code target address at a call site from the return address
@@ -609,12 +606,11 @@ class Assembler : public AssemblerBase {
   // This is for calls and branches within generated code.  The serializer
   // has already deserialized the lui/ori instructions etc.
   inline static void deserialization_set_special_target_at(
-      Isolate* isolate, Address instruction_payload, Code* code,
-      Address target);
+      Address instruction_payload, Code* code, Address target);
 
   // This sets the internal reference at the pc.
   inline static void deserialization_set_target_internal_reference_at(
-      Isolate* isolate, Address pc, Address target,
+      Address pc, Address target,
       RelocInfo::Mode mode = RelocInfo::INTERNAL_REFERENCE);
 
   // Size of an instruction.
@@ -685,16 +681,13 @@ class Assembler : public AssemblerBase {
     // Helper values.
     LAST_CODE_MARKER,
     FIRST_IC_MARKER = PROPERTY_ACCESS_INLINED,
-    // Code aging
-    CODE_AGE_MARKER_NOP = 6,
-    CODE_AGE_SEQUENCE_NOP
   };
 
   // Type == 0 is the default non-marking nop. For mips this is a
   // sll(zero_reg, zero_reg, 0). We use rt_reg == at for non-zero
   // marking, to avoid conflict with ssnop and ehb instructions.
   void nop(unsigned int type = 0) {
-    DCHECK(type < 32);
+    DCHECK_LT(type, 32);
     Register nop_rt_reg = (type == 0) ? zero_reg : at;
     sll(zero_reg, nop_rt_reg, type, true);
   }
@@ -1964,8 +1957,6 @@ class Assembler : public AssemblerBase {
     return internal_trampoline_exception_;
   }
 
-  void DoubleAsTwoUInt32(double d, uint32_t* lo, uint32_t* hi);
-
   bool is_trampoline_emitted() const {
     return trampoline_emitted_;
   }
@@ -2057,12 +2048,8 @@ class Assembler : public AssemblerBase {
   // few aliases, but mixing both does not look clean to me.
   // Anyway we could surely implement this differently.
 
-  void GenInstrRegister(Opcode opcode,
-                        Register rs,
-                        Register rt,
-                        Register rd,
-                        uint16_t sa = 0,
-                        SecondaryField func = NULLSF);
+  void GenInstrRegister(Opcode opcode, Register rs, Register rt, Register rd,
+                        uint16_t sa = 0, SecondaryField func = nullptrSF);
 
   void GenInstrRegister(Opcode opcode,
                         Register rs,
@@ -2071,33 +2058,20 @@ class Assembler : public AssemblerBase {
                         uint16_t lsb,
                         SecondaryField func);
 
-  void GenInstrRegister(Opcode opcode,
-                        SecondaryField fmt,
-                        FPURegister ft,
-                        FPURegister fs,
-                        FPURegister fd,
-                        SecondaryField func = NULLSF);
+  void GenInstrRegister(Opcode opcode, SecondaryField fmt, FPURegister ft,
+                        FPURegister fs, FPURegister fd,
+                        SecondaryField func = nullptrSF);
 
-  void GenInstrRegister(Opcode opcode,
-                        FPURegister fr,
-                        FPURegister ft,
-                        FPURegister fs,
-                        FPURegister fd,
-                        SecondaryField func = NULLSF);
+  void GenInstrRegister(Opcode opcode, FPURegister fr, FPURegister ft,
+                        FPURegister fs, FPURegister fd,
+                        SecondaryField func = nullptrSF);
 
-  void GenInstrRegister(Opcode opcode,
-                        SecondaryField fmt,
-                        Register rt,
-                        FPURegister fs,
-                        FPURegister fd,
-                        SecondaryField func = NULLSF);
+  void GenInstrRegister(Opcode opcode, SecondaryField fmt, Register rt,
+                        FPURegister fs, FPURegister fd,
+                        SecondaryField func = nullptrSF);
 
-  void GenInstrRegister(Opcode opcode,
-                        SecondaryField fmt,
-                        Register rt,
-                        FPUControlRegister fs,
-                        SecondaryField func = NULLSF);
-
+  void GenInstrRegister(Opcode opcode, SecondaryField fmt, Register rt,
+                        FPUControlRegister fs, SecondaryField func = nullptrSF);
 
   void GenInstrImmediate(
       Opcode opcode, Register rs, Register rt, int32_t j,
@@ -2191,7 +2165,7 @@ class Assembler : public AssemblerBase {
   }
 
   // Labels.
-  void print(Label* L);
+  void print(const Label* L);
   void bind_to(Label* L, int pos);
   void next(Label* L, bool is_internal);
 
@@ -2292,7 +2266,6 @@ class Assembler : public AssemblerBase {
 
   friend class RegExpMacroAssemblerMIPS;
   friend class RelocInfo;
-  friend class CodePatcher;
   friend class BlockTrampolinePoolScope;
   friend class EnsureSpace;
 };
@@ -2319,4 +2292,4 @@ class UseScratchRegisterScope {
 }  // namespace internal
 }  // namespace v8
 
-#endif  // V8_ARM_ASSEMBLER_MIPS_H_
+#endif  // V8_MIPS64_ASSEMBLER_MIPS64_H_

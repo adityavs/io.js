@@ -1,9 +1,7 @@
-<!--
-Run `node tools/doc/addon-verify.js` when you change examples in this document.
--->
 # C++ Addons
 
 <!--introduced_in=v0.10.0-->
+<!-- type=misc -->
 
 Node.js Addons are dynamically-linked shared objects, written in C++, that
 can be loaded into Node.js using the [`require()`][require] function, and used
@@ -11,7 +9,7 @@ just as if they were an ordinary Node.js module. They are used primarily to
 provide an interface between JavaScript running in Node.js and C/C++ libraries.
 
 At the moment, the method for implementing Addons is rather complicated,
-involving knowledge of several components and APIs :
+involving knowledge of several components and APIs:
 
  - V8: the C++ library Node.js currently uses to provide the
    JavaScript implementation. V8 provides the mechanisms for creating objects,
@@ -37,8 +35,9 @@ involving knowledge of several components and APIs :
 
  - Node.js includes a number of other statically linked libraries including
    OpenSSL. These other libraries are located in the `deps/` directory in the
-   Node.js source tree. Only the V8 and OpenSSL symbols are purposefully
-   re-exported by Node.js and may be used to various extents by Addons.
+   Node.js source tree. Only the libuv, OpenSSL, V8 and zlib symbols are
+   purposefully re-exported by Node.js and may be used to various extents by
+   Addons.
    See [Linking to Node.js' own dependencies][] for additional information.
 
 All of the following examples are available for [download][] and may
@@ -73,11 +72,11 @@ void Method(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(String::NewFromUtf8(isolate, "world"));
 }
 
-void init(Local<Object> exports) {
+void Initialize(Local<Object> exports) {
   NODE_SET_METHOD(exports, "hello", Method);
 }
 
-NODE_MODULE(NODE_GYP_MODULE_NAME, init)
+NODE_MODULE(NODE_GYP_MODULE_NAME, Initialize)
 
 }  // namespace demo
 ```
@@ -94,31 +93,31 @@ There is no semi-colon after `NODE_MODULE` as it's not a function (see
 `node.h`).
 
 The `module_name` must match the filename of the final binary (excluding
-the .node suffix).
+the `.node` suffix).
 
-In the `hello.cc` example, then, the initialization function is `init` and the
-Addon module name is `binding`.
+In the `hello.cc` example, then, the initialization function is `Initialize`
+and the addon module name is `addon`.
 
 ### Building
 
 Once the source code has been written, it must be compiled into the binary
-`binding.node` file. To do so, create a file called `binding.gyp` in the
+`addon.node` file. To do so, create a file called `binding.gyp` in the
 top-level of the project describing the build configuration of the module
-using a JSON-like format. This file is used by [node-gyp][] -- a tool written
+using a JSON-like format. This file is used by [node-gyp][] — a tool written
 specifically to compile Node.js Addons.
 
 ```json
 {
   "targets": [
     {
-      "target_name": "binding",
+      "target_name": "addon",
       "sources": [ "hello.cc" ]
     }
   ]
 }
 ```
 
-*Note*: A version of the `node-gyp` utility is bundled and distributed with
+A version of the `node-gyp` utility is bundled and distributed with
 Node.js as part of `npm`. This version is not made directly available for
 developers to use and is intended only to support the ability to use the
 `npm install` command to compile and install Addons. Developers who wish to
@@ -131,21 +130,21 @@ generate the appropriate project build files for the current platform. This
 will generate either a `Makefile` (on Unix platforms) or a `vcxproj` file
 (on Windows) in the `build/` directory.
 
-Next, invoke the `node-gyp build` command to generate the compiled
-`binding.node` file. This will be put into the `build/Release/` directory.
+Next, invoke the `node-gyp build` command to generate the compiled `addon.node`
+file. This will be put into the `build/Release/` directory.
 
 When using `npm install` to install a Node.js Addon, npm uses its own bundled
 version of `node-gyp` to perform this same set of actions, generating a
 compiled version of the Addon for the user's platform on demand.
 
 Once built, the binary Addon can be used from within Node.js by pointing
-[`require()`][require] to the built `binding.node` module:
+[`require()`][require] to the built `addon.node` module:
 
 ```js
 // hello.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-console.log(binding.hello());
+console.log(addon.hello());
 // Prints: 'world'
 ```
 
@@ -162,9 +161,9 @@ similar to:
 
 ```js
 try {
-  return require('./build/Release/binding.node');
+  return require('./build/Release/addon.node');
 } catch (err) {
-  return require('./build/Debug/binding.node');
+  return require('./build/Debug/addon.node');
 }
 ```
 
@@ -198,9 +197,9 @@ When calling [`require()`][require], the `.node` extension can usually be
 omitted and Node.js will still find and initialize the Addon. One caveat,
 however, is that Node.js will first attempt to locate and load modules or
 JavaScript files that happen to share the same base name. For instance, if
-there is a file `binding.js` in the same directory as the binary `binding.node`,
-then [`require('binding')`][require] will give precedence to the `binding.js`
-file and load it instead.
+there is a file `addon.js` in the same directory as the binary `addon.node`,
+then [`require('addon')`][require] will give precedence to the `addon.js` file
+and load it instead.
 
 ## Native Abstractions for Node.js
 
@@ -218,15 +217,14 @@ Addon developers are recommended to use to keep compatibility between past and
 future releases of V8 and Node.js. See the `nan` [examples][] for an
 illustration of how it can be used.
 
-
 ## N-API
 
-> Stability: 1 - Experimental
+> Stability: 2 - Stable
 
 N-API is an API for building native Addons. It is independent from
-the underlying JavaScript runtime (e.g., V8) and is maintained as part of
+the underlying JavaScript runtime (e.g. V8) and is maintained as part of
 Node.js itself. This API will be Application Binary Interface (ABI) stable
-across version of Node.js. It is intended to insulate Addons from
+across versions of Node.js. It is intended to insulate Addons from
 changes in the underlying JavaScript engine and allow modules
 compiled for one version to run on later versions of Node.js without
 recompilation. Addons are built/packaged with the same approach/tools
@@ -248,7 +246,7 @@ napi_value Method(napi_env env, napi_callback_info args) {
   napi_value greeting;
   napi_status status;
 
-  status = napi_create_string_utf8(env, "hello", 6, &greeting);
+  status = napi_create_string_utf8(env, "hello", NAPI_AUTO_LENGTH, &greeting);
   if (status != napi_ok) return nullptr;
   return greeting;
 }
@@ -287,18 +285,18 @@ Each of these examples using the following `binding.gyp` file:
 {
   "targets": [
     {
-      "target_name": "binding",
-      "sources": [ "binding.cc" ]
+      "target_name": "addon",
+      "sources": [ "addon.cc" ]
     }
   ]
 }
 ```
 
 In cases where there is more than one `.cc` file, simply add the additional
-filename to the `sources` array. For example:
+filename to the `sources` array:
 
 ```json
-"sources": ["binding.cc", "myexample.cc"]
+"sources": ["addon.cc", "myexample.cc"]
 ```
 
 Once the `binding.gyp` file is ready, the example Addons can be configured and
@@ -307,7 +305,6 @@ built using `node-gyp`:
 ```console
 $ node-gyp configure build
 ```
-
 
 ### Function arguments
 
@@ -320,7 +317,7 @@ The following example illustrates how to read function arguments passed from
 JavaScript and how to return a result:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 
 namespace demo {
@@ -377,11 +374,10 @@ Once compiled, the example Addon can be required and used from within Node.js:
 
 ```js
 // test.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-console.log('This should be eight:', binding.add(3, 5));
+console.log('This should be eight:', addon.add(3, 5));
 ```
-
 
 ### Callbacks
 
@@ -390,7 +386,7 @@ function and execute them from there. The following example illustrates how
 to invoke such callbacks:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 
 namespace demo {
@@ -430,9 +426,9 @@ To test it, run the following JavaScript:
 
 ```js
 // test.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-binding((msg) => {
+addon((msg) => {
   console.log(msg);
 // Prints: 'hello world'
 });
@@ -447,7 +443,7 @@ illustrated in the following example. An object is created and returned with a
 property `msg` that echoes the string passed to `createObject()`:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 
 namespace demo {
@@ -481,14 +477,13 @@ To test it in JavaScript:
 
 ```js
 // test.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-const obj1 = binding('hello');
-const obj2 = binding('world');
+const obj1 = addon('hello');
+const obj2 = addon('world');
 console.log(obj1.msg, obj2.msg);
 // Prints: 'hello world'
 ```
-
 
 ### Function factory
 
@@ -496,7 +491,7 @@ Another common scenario is creating JavaScript functions that wrap C++
 functions and returning those back to JavaScript:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 
 namespace demo {
@@ -540,13 +535,12 @@ To test:
 
 ```js
 // test.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-const fn = binding();
+const fn = addon();
 console.log(fn());
 // Prints: 'hello world'
 ```
-
 
 ### Wrapping C++ objects
 
@@ -554,7 +548,7 @@ It is also possible to wrap C++ objects/classes in a way that allows new
 instances to be created using the JavaScript `new` operator:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 #include "myobject.h"
 
@@ -689,9 +683,9 @@ To build this example, the `myobject.cc` file must be added to the
 {
   "targets": [
     {
-      "target_name": "binding",
+      "target_name": "addon",
       "sources": [
-        "binding.cc",
+        "addon.cc",
         "myobject.cc"
       ]
     }
@@ -703,9 +697,9 @@ Test it with:
 
 ```js
 // test.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-const obj = new binding.MyObject(10);
+const obj = new addon.MyObject(10);
 console.log(obj.plusOne());
 // Prints: 11
 console.log(obj.plusOne());
@@ -720,15 +714,15 @@ Alternatively, it is possible to use a factory pattern to avoid explicitly
 creating object instances using the JavaScript `new` operator:
 
 ```js
-const obj = binding.createObject();
+const obj = addon.createObject();
 // instead of:
-// const obj = new binding.Object();
+// const obj = new addon.Object();
 ```
 
-First, the `createObject()` method is implemented in `binding.cc`:
+First, the `createObject()` method is implemented in `addon.cc`:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 #include "myobject.h"
 
@@ -884,9 +878,9 @@ Once again, to build this example, the `myobject.cc` file must be added to the
 {
   "targets": [
     {
-      "target_name": "binding",
+      "target_name": "addon",
       "sources": [
-        "binding.cc",
+        "addon.cc",
         "myobject.cc"
       ]
     }
@@ -898,7 +892,7 @@ Test it with:
 
 ```js
 // test.js
-const createObject = require('./build/Release/binding');
+const createObject = require('./build/Release/addon');
 
 const obj = createObject(10);
 console.log(obj.plusOne());
@@ -917,7 +911,6 @@ console.log(obj2.plusOne());
 // Prints: 23
 ```
 
-
 ### Passing wrapped objects around
 
 In addition to wrapping and returning C++ objects, it is possible to pass
@@ -926,7 +919,7 @@ wrapped objects around by unwrapping them with the Node.js helper function
 that can take two `MyObject` objects as input arguments:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <node.h>
 #include <node_object_wrap.h>
 #include "myobject.h"
@@ -1080,11 +1073,11 @@ Test it with:
 
 ```js
 // test.js
-const binding = require('./build/Release/binding');
+const addon = require('./build/Release/addon');
 
-const obj1 = binding.createObject(10);
-const obj2 = binding.createObject(20);
-const result = binding.add(obj1, obj2);
+const obj1 = addon.createObject(10);
+const obj2 = addon.createObject(20);
+const result = addon.add(obj1, obj2);
 
 console.log(result);
 // Prints: 30
@@ -1092,27 +1085,29 @@ console.log(result);
 
 ### AtExit hooks
 
-An "AtExit" hook is a function that is invoked after the Node.js event loop
+An `AtExit` hook is a function that is invoked after the Node.js event loop
 has ended but before the JavaScript VM is terminated and Node.js shuts down.
-"AtExit" hooks are registered using the `node::AtExit` API.
+`AtExit` hooks are registered using the `node::AtExit` API.
 
 #### void AtExit(callback, args)
 
-* `callback` {void (\*)(void\*)} A pointer to the function to call at exit.
-* `args` {void\*} A pointer to pass to the callback at exit.
+* `callback` <span class="type">&lt;void (\*)(void\*)&gt;</span>
+  A pointer to the function to call at exit.
+* `args` <span class="type">&lt;void\*&gt;</span>
+  A pointer to pass to the callback at exit.
 
 Registers exit hooks that run after the event loop has ended but before the VM
 is killed.
 
-AtExit takes two parameters: a pointer to a callback function to run at exit,
+`AtExit` takes two parameters: a pointer to a callback function to run at exit,
 and a pointer to untyped context data to be passed to that callback.
 
 Callbacks are run in last-in first-out order.
 
-The following `binding.cc` implements AtExit:
+The following `addon.cc` implements `AtExit`:
 
 ```cpp
-// binding.cc
+// addon.cc
 #include <assert.h>
 #include <stdlib.h>
 #include <node.h>
@@ -1164,7 +1159,7 @@ Test in JavaScript by running:
 
 ```js
 // test.js
-require('./build/Release/binding');
+require('./build/Release/addon');
 ```
 
 [Embedder's Guide]: https://github.com/v8/v8/wiki/Embedder's%20Guide

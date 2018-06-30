@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef TRAP_HANDLER_INTERNAL_H_
-#define TRAP_HANDLER_INTERNAL_H_
+#ifndef V8_TRAP_HANDLER_TRAP_HANDLER_INTERNAL_H_
+#define V8_TRAP_HANDLER_TRAP_HANDLER_INTERNAL_H_
 
 // This file should not be included (even transitively) by files outside of
 // src/trap-handler.
@@ -68,8 +68,15 @@ extern std::atomic_size_t gRecoveredTrapCount;
 // unchanged.
 bool TryFindLandingPad(uintptr_t fault_addr, uintptr_t* landing_pad);
 
+#if V8_TRAP_HANDLER_SUPPORTED
+// When using the default signal handler, we save the old one to restore in case
+// V8 chooses not to handle the signal.
+extern struct sigaction g_old_handler;
+extern bool g_is_default_signal_handler_registered;
+#endif
+
 }  // namespace trap_handler
 }  // namespace internal
 }  // namespace v8
 
-#endif  // TRAP_HANDLER_INTERNAL_H_
+#endif  // V8_TRAP_HANDLER_TRAP_HANDLER_INTERNAL_H_

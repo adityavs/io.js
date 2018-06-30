@@ -32,6 +32,8 @@ MachineType MachineTypeFor(ValueType type) {
       return MachineType::Float32();
     case wasm::kWasmS128:
       return MachineType::Simd128();
+    case wasm::kWasmAnyRef:
+      return MachineType::TaggedPointer();
     default:
       UNREACHABLE();
   }
@@ -158,6 +160,8 @@ struct Allocator {
 
   int stack_offset;
 
+  void AdjustStackOffset(int offset) { stack_offset += offset; }
+
   LinkageLocation Next(ValueType type) {
     if (IsFloatingPoint(type)) {
       // Allocate a floating point register/stack location.
@@ -221,41 +225,48 @@ static constexpr Allocator parameter_registers(kGPParamRegisters,
 }  // namespace
 
 // General code uses the above configuration data.
-CallDescriptor* GetWasmCallDescriptor(Zone* zone, wasm::FunctionSig* fsig) {
-  // The '+ 1' here is to accomodate the wasm_context as first parameter.
+CallDescriptor* GetWasmCallDescriptor(
+    Zone* zone, wasm::FunctionSig* fsig,
+    WasmGraphBuilder::UseRetpoline use_retpoline) {
+  // The '+ 1' here is to accomodate the instance object as first parameter.
   LocationSignature::Builder locations(zone, fsig->return_count(),
                                        fsig->parameter_count() + 1);
 
-  Allocator rets = return_registers;
-
-  // Add return location(s).
-  const int return_count = static_cast<int>(locations.return_count_);
-  for (int i = 0; i < return_count; i++) {
-    ValueType ret = fsig->GetReturn(i);
-    locations.AddReturn(rets.Next(ret));
-  }
-
+  // Add register and/or stack parameter(s).
   Allocator params = parameter_registers;
 
-  // Add parameter for the wasm_context.
-  locations.AddParam(params.Next(MachineType::PointerRepresentation()));
+  // The instance object.
+  locations.AddParam(params.Next(MachineRepresentation::kTaggedPointer));
 
-  // Add register and/or stack parameter(s).
   const int parameter_count = static_cast<int>(fsig->parameter_count());
   for (int i = 0; i < parameter_count; i++) {
     ValueType param = fsig->GetParam(i);
-    locations.AddParam(params.Next(param));
+    auto l = params.Next(param);
+    locations.AddParam(l);
+  }
+
+  // Add return location(s).
+  Allocator rets = return_registers;
+  rets.AdjustStackOffset(params.stack_offset);
+
+  const int return_count = static_cast<int>(locations.return_count_);
+  for (int i = 0; i < return_count; i++) {
+    ValueType ret = fsig->GetReturn(i);
+    auto l = rets.Next(ret);
+    locations.AddReturn(l);
   }
 
   const RegList kCalleeSaveRegisters = 0;
   const RegList kCalleeSaveFPRegisters = 0;
 
   // The target for wasm calls is always a code object.
-  MachineType target_type = MachineType::AnyTagged();
+  MachineType target_type = MachineType::Pointer();
   LinkageLocation target_loc = LinkageLocation::ForAnyRegister(target_type);
 
+  CallDescriptor::Kind kind = CallDescriptor::kCallWasmFunction;
+
   return new (zone) CallDescriptor(       // --
-      CallDescriptor::kCallCodeObject,    // kind
+      kind,                               // kind
       target_type,                        // target MachineType
       target_loc,                         // target location
       locations.Build(),                  // location_sig
@@ -263,81 +274,85 @@ CallDescriptor* GetWasmCallDescriptor(Zone* zone, wasm::FunctionSig* fsig) {
       compiler::Operator::kNoProperties,  // properties
       kCalleeSaveRegisters,               // callee-saved registers
       kCalleeSaveFPRegisters,             // callee-saved fp regs
-      CallDescriptor::kUseNativeStack,    // flags
-      "wasm-call");
+      use_retpoline ? CallDescriptor::kRetpoline
+                    : CallDescriptor::kNoFlags,  // flags
+      "wasm-call",                               // debug name
+      0,                                         // allocatable registers
+      rets.stack_offset - params.stack_offset);  // stack_return_count
 }
 
 CallDescriptor* ReplaceTypeInCallDescriptorWith(
-    Zone* zone, CallDescriptor* descriptor, size_t num_replacements,
+    Zone* zone, CallDescriptor* call_descriptor, size_t num_replacements,
     MachineType input_type, MachineRepresentation output_type) {
-  size_t parameter_count = descriptor->ParameterCount();
-  size_t return_count = descriptor->ReturnCount();
-  for (size_t i = 0; i < descriptor->ParameterCount(); i++) {
-    if (descriptor->GetParameterType(i) == input_type) {
+  size_t parameter_count = call_descriptor->ParameterCount();
+  size_t return_count = call_descriptor->ReturnCount();
+  for (size_t i = 0; i < call_descriptor->ParameterCount(); i++) {
+    if (call_descriptor->GetParameterType(i) == input_type) {
       parameter_count += num_replacements - 1;
     }
   }
-  for (size_t i = 0; i < descriptor->ReturnCount(); i++) {
-    if (descriptor->GetReturnType(i) == input_type) {
+  for (size_t i = 0; i < call_descriptor->ReturnCount(); i++) {
+    if (call_descriptor->GetReturnType(i) == input_type) {
       return_count += num_replacements - 1;
     }
   }
-  if (parameter_count == descriptor->ParameterCount() &&
-      return_count == descriptor->ReturnCount()) {
-    return descriptor;
+  if (parameter_count == call_descriptor->ParameterCount() &&
+      return_count == call_descriptor->ReturnCount()) {
+    return call_descriptor;
   }
 
   LocationSignature::Builder locations(zone, return_count, parameter_count);
 
-  Allocator rets = return_registers;
-
-  for (size_t i = 0; i < descriptor->ReturnCount(); i++) {
-    if (descriptor->GetReturnType(i) == input_type) {
-      for (size_t j = 0; j < num_replacements; j++) {
-        locations.AddReturn(rets.Next(output_type));
-      }
-    } else {
-      locations.AddReturn(
-          rets.Next(descriptor->GetReturnType(i).representation()));
-    }
-  }
-
   Allocator params = parameter_registers;
-
-  for (size_t i = 0; i < descriptor->ParameterCount(); i++) {
-    if (descriptor->GetParameterType(i) == input_type) {
+  for (size_t i = 0; i < call_descriptor->ParameterCount(); i++) {
+    if (call_descriptor->GetParameterType(i) == input_type) {
       for (size_t j = 0; j < num_replacements; j++) {
         locations.AddParam(params.Next(output_type));
       }
     } else {
       locations.AddParam(
-          params.Next(descriptor->GetParameterType(i).representation()));
+          params.Next(call_descriptor->GetParameterType(i).representation()));
     }
   }
 
-  return new (zone) CallDescriptor(          // --
-      descriptor->kind(),                    // kind
-      descriptor->GetInputType(0),           // target MachineType
-      descriptor->GetInputLocation(0),       // target location
-      locations.Build(),                     // location_sig
-      params.stack_offset,                   // stack_parameter_count
-      descriptor->properties(),              // properties
-      descriptor->CalleeSavedRegisters(),    // callee-saved registers
-      descriptor->CalleeSavedFPRegisters(),  // callee-saved fp regs
-      descriptor->flags(),                   // flags
-      descriptor->debug_name());
+  Allocator rets = return_registers;
+  rets.AdjustStackOffset(params.stack_offset);
+  for (size_t i = 0; i < call_descriptor->ReturnCount(); i++) {
+    if (call_descriptor->GetReturnType(i) == input_type) {
+      for (size_t j = 0; j < num_replacements; j++) {
+        locations.AddReturn(rets.Next(output_type));
+      }
+    } else {
+      locations.AddReturn(
+          rets.Next(call_descriptor->GetReturnType(i).representation()));
+    }
+  }
+
+  return new (zone) CallDescriptor(               // --
+      call_descriptor->kind(),                    // kind
+      call_descriptor->GetInputType(0),           // target MachineType
+      call_descriptor->GetInputLocation(0),       // target location
+      locations.Build(),                          // location_sig
+      params.stack_offset,                        // stack_parameter_count
+      call_descriptor->properties(),              // properties
+      call_descriptor->CalleeSavedRegisters(),    // callee-saved registers
+      call_descriptor->CalleeSavedFPRegisters(),  // callee-saved fp regs
+      call_descriptor->flags(),                   // flags
+      call_descriptor->debug_name(),              // debug name
+      call_descriptor->AllocatableRegisters(),    // allocatable registers
+      rets.stack_offset - params.stack_offset);   // stack_return_count
 }
 
 CallDescriptor* GetI32WasmCallDescriptor(Zone* zone,
-                                         CallDescriptor* descriptor) {
-  return ReplaceTypeInCallDescriptorWith(zone, descriptor, 2,
+                                         CallDescriptor* call_descriptor) {
+  return ReplaceTypeInCallDescriptorWith(zone, call_descriptor, 2,
                                          MachineType::Int64(),
                                          MachineRepresentation::kWord32);
 }
 
-CallDescriptor* GetI32WasmCallDescriptorForSimd(Zone* zone,
-                                                CallDescriptor* descriptor) {
-  return ReplaceTypeInCallDescriptorWith(zone, descriptor, 4,
+CallDescriptor* GetI32WasmCallDescriptorForSimd(
+    Zone* zone, CallDescriptor* call_descriptor) {
+  return ReplaceTypeInCallDescriptorWith(zone, call_descriptor, 4,
                                          MachineType::Simd128(),
                                          MachineRepresentation::kWord32);
 }

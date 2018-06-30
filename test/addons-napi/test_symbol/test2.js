@@ -3,11 +3,11 @@ const common = require('../../common');
 const assert = require('assert');
 
 // testing api calls for symbol
-const test_symbol = require(`./build/${common.buildType}/binding`);
+const test_symbol = require(`./build/${common.buildType}/test_symbol`);
 
 const fooSym = test_symbol.New('foo');
 const myObj = {};
-myObj['foo'] = 'bar';
+myObj.foo = 'bar';
 myObj[fooSym] = 'baz';
 Object.keys(myObj); // -> [ 'foo' ]
 Object.getOwnPropertyNames(myObj); // -> [ 'foo' ]

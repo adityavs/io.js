@@ -20,7 +20,8 @@ namespace compiler {
 
 CodeAssemblerTestState::CodeAssemblerTestState(CodeAssemblerTest* test)
     : CodeAssemblerState(test->isolate(), test->zone(),
-                         VoidDescriptor(test->isolate()), Code::STUB, "test") {}
+                         VoidDescriptor(test->isolate()), Code::STUB, "test",
+                         PoisoningMitigationLevel::kOn) {}
 
 TARGET_TEST_F(CodeAssemblerTest, IntPtrAdd) {
   CodeAssemblerTestState state(this);
@@ -108,6 +109,20 @@ TARGET_TEST_F(CodeAssemblerTest, IntPtrMul) {
     Node* b = m.IntPtrConstant(5);
     Node* c = m.IntPtrMul(a, b);
     EXPECT_THAT(c, IsIntPtrConstant(500));
+  }
+  // x * 2^CONST  => x << CONST
+  {
+    Node* a = m.Parameter(0);
+    Node* b = m.IntPtrConstant(1 << 3);
+    Node* c = m.IntPtrMul(a, b);
+    EXPECT_THAT(c, IsWordShl(a, IsIntPtrConstant(3)));
+  }
+  // 2^CONST * x  => x << CONST
+  {
+    Node* a = m.IntPtrConstant(1 << 3);
+    Node* b = m.Parameter(0);
+    Node* c = m.IntPtrMul(a, b);
+    EXPECT_THAT(c, IsWordShl(b, IsIntPtrConstant(3)));
   }
 }
 

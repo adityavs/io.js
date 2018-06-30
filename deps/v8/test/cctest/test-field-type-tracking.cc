@@ -11,14 +11,14 @@
 
 #include "src/compilation-cache.h"
 #include "src/compilation-dependencies.h"
-#include "src/compilation-info.h"
 #include "src/execution.h"
-#include "src/factory.h"
 #include "src/field-type.h"
 #include "src/global-handles.h"
+#include "src/heap/factory.h"
 #include "src/ic/stub-cache.h"
 #include "src/macro-assembler.h"
 #include "src/objects-inl.h"
+#include "src/optimized-compilation-info.h"
 #include "src/property.h"
 #include "src/transitions.h"
 
@@ -66,11 +66,11 @@ static Handle<AccessorPair> CreateAccessorPair(bool with_getter,
   Handle<AccessorPair> pair = factory->NewAccessorPair();
   Handle<String> empty_string = factory->empty_string();
   if (with_getter) {
-    Handle<JSFunction> func = factory->NewFunction(empty_string);
+    Handle<JSFunction> func = factory->NewFunctionForTest(empty_string);
     pair->set_getter(*func);
   }
   if (with_setter) {
-    Handle<JSFunction> func = factory->NewFunction(empty_string);
+    Handle<JSFunction> func = factory->NewFunctionForTest(empty_string);
     pair->set_setter(*func);
   }
   return pair;
@@ -368,10 +368,9 @@ class Expectations {
                  heap_type);
 
     Handle<String> name = MakeName("prop", property_index);
-    bool created_new_map;
     return Map::TransitionToDataProperty(
         map, name, value, attributes, constness,
-        Object::CERTAINLY_NOT_STORE_FROM_KEYED, &created_new_map);
+        Object::CERTAINLY_NOT_STORE_FROM_KEYED);
   }
 
   Handle<Map> TransitionToDataConstant(Handle<Map> map,
@@ -382,10 +381,9 @@ class Expectations {
     SetDataConstant(property_index, attributes, value);
 
     Handle<String> name = MakeName("prop", property_index);
-    bool created_new_map;
-    return Map::TransitionToDataProperty(map, name, value, attributes, kConst,
-                                         Object::CERTAINLY_NOT_STORE_FROM_KEYED,
-                                         &created_new_map);
+    return Map::TransitionToDataProperty(
+        map, name, value, attributes, kConst,
+        Object::CERTAINLY_NOT_STORE_FROM_KEYED);
   }
 
   Handle<Map> FollowDataTransition(Handle<Map> map,
@@ -401,7 +399,7 @@ class Expectations {
     Handle<String> name = MakeName("prop", property_index);
     Map* target =
         TransitionsAccessor(map).SearchTransition(*name, kData, attributes);
-    CHECK(target != NULL);
+    CHECK_NOT_NULL(target);
     return handle(target);
   }
 
@@ -609,7 +607,7 @@ static void TestGeneralizeField(int detach_property_at_index,
 
   CHECK(detach_property_at_index >= -1 &&
         detach_property_at_index < kPropCount);
-  CHECK(property_index < kPropCount);
+  CHECK_LT(property_index, kPropCount);
   CHECK_NE(detach_property_at_index, property_index);
 
   const bool is_detached_map = detach_property_at_index >= 0;
@@ -1405,7 +1403,7 @@ static void TestReconfigureProperty_CustomPropertyAfterTargetMap(
   Expectations expectations(isolate);
 
   const int kSplitProp = 2;
-  CHECK(kSplitProp < kCustomPropIndex);
+  CHECK_LT(kSplitProp, kCustomPropIndex);
 
   const PropertyConstness constness = kMutable;
   const Representation representation = Representation::Smi();
@@ -1484,7 +1482,7 @@ TEST(ReconfigureDataFieldAttribute_SameDataConstantAfterTargetMap) {
     TestConfig() {
       Isolate* isolate = CcTest::i_isolate();
       Factory* factory = isolate->factory();
-      js_func_ = factory->NewFunction(factory->empty_string());
+      js_func_ = factory->NewFunctionForTest(factory->empty_string());
     }
 
     Handle<Map> AddPropertyAtBranch(int branch_id, Expectations& expectations,
@@ -1520,8 +1518,8 @@ TEST(ReconfigureDataFieldAttribute_DataConstantToDataFieldAfterTargetMap) {
       Handle<String> name = factory->empty_string();
       Handle<Map> sloppy_map =
           Map::CopyInitialMap(isolate->sloppy_function_map());
-      Handle<SharedFunctionInfo> info = factory->NewSharedFunctionInfo(
-          name, MaybeHandle<Code>(), sloppy_map->is_constructor());
+      Handle<SharedFunctionInfo> info =
+          factory->NewSharedFunctionInfoForBuiltin(name, Builtins::kIllegal);
       function_type_ = FieldType::Class(sloppy_map, isolate);
       CHECK(sloppy_map->is_stable());
 
@@ -1570,7 +1568,7 @@ TEST(ReconfigureDataFieldAttribute_DataConstantToAccConstantAfterTargetMap) {
     TestConfig() {
       Isolate* isolate = CcTest::i_isolate();
       Factory* factory = isolate->factory();
-      js_func_ = factory->NewFunction(factory->empty_string());
+      js_func_ = factory->NewFunctionForTest(factory->empty_string());
       pair_ = CreateAccessorPair(true, true);
     }
 
@@ -2121,7 +2119,7 @@ TEST(ReconfigurePropertySplitMapTransitionsOverflow) {
       Handle<String> name = MakeName("prop", i);
       Map* target =
           TransitionsAccessor(map2).SearchTransition(*name, kData, NONE);
-      CHECK(target != NULL);
+      CHECK_NOT_NULL(target);
       map2 = handle(target);
     }
 
@@ -2643,7 +2641,8 @@ TEST(TransitionDataConstantToSameDataConstant) {
   Isolate* isolate = CcTest::i_isolate();
   Factory* factory = isolate->factory();
 
-  Handle<JSFunction> js_func = factory->NewFunction(factory->empty_string());
+  Handle<JSFunction> js_func =
+      factory->NewFunctionForTest(factory->empty_string());
   TransitionToDataConstantOperator transition_op(js_func);
 
   SameMapChecker checker;
@@ -2658,8 +2657,8 @@ TEST(TransitionDataConstantToAnotherDataConstant) {
   Factory* factory = isolate->factory();
   Handle<String> name = factory->empty_string();
   Handle<Map> sloppy_map = Map::CopyInitialMap(isolate->sloppy_function_map());
-  Handle<SharedFunctionInfo> info = factory->NewSharedFunctionInfo(
-      name, MaybeHandle<Code>(), sloppy_map->is_constructor());
+  Handle<SharedFunctionInfo> info =
+      factory->NewSharedFunctionInfoForBuiltin(name, Builtins::kIllegal);
   Handle<FieldType> function_type = FieldType::Class(sloppy_map, isolate);
   CHECK(sloppy_map->is_stable());
 
@@ -2690,7 +2689,8 @@ TEST(TransitionDataConstantToDataField) {
   Factory* factory = isolate->factory();
   Handle<FieldType> any_type = FieldType::Any(isolate);
 
-  Handle<JSFunction> js_func1 = factory->NewFunction(factory->empty_string());
+  Handle<JSFunction> js_func1 =
+      factory->NewFunctionForTest(factory->empty_string());
   TransitionToDataConstantOperator transition_op1(js_func1);
 
   Handle<Object> value2 = isolate->factory()->NewHeapNumber(0);
@@ -2726,7 +2726,7 @@ TEST(HoleyMutableHeapNumber) {
   CHECK_EQ(kHoleNanInt64, mhn->value_as_bits());
 
   mhn = isolate->factory()->NewHeapNumber(0.0, MUTABLE);
-  CHECK_EQ(V8_UINT64_C(0), mhn->value_as_bits());
+  CHECK_EQ(uint64_t{0}, mhn->value_as_bits());
 
   mhn->set_value_as_bits(kHoleNanInt64);
   CHECK_EQ(kHoleNanInt64, mhn->value_as_bits());
